@@ -2,6 +2,7 @@
 
 install:
 	pip install -r requirements.txt
+	ln -sf $(shell pwd)/bugzilla_cli.py ~/.local/bin/bugzilla-cli
 
 install-dev:
 	pip install -r requirements-dev.txt
