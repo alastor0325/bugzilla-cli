@@ -21,7 +21,7 @@ build/
 htmlcov/
 .tox/
 
-# Virtual environments
+# Virtual environments — the project uses .venv/ locally
 .venv/
 venv/
 env/
