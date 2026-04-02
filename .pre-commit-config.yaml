@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pytest-unit
+        name: pytest (unit tests)
+        entry: python -m pytest tests/ -x -q --ignore=tests/test_integration.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: no-secrets
+        name: No API keys in source
+        entry: bash -c 'grep -rn "API_KEY\s*=" bugzilla_cli.py && echo "FAIL: hardcoded key" && exit 1 || exit 0'
+        language: system
+        pass_filenames: false
