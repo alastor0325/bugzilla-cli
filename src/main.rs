@@ -271,17 +271,38 @@ fn cmd_get(id: u64, comments: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+const TRIAGE_COMPONENTS: &[&str] = &[
+    "Audio/Video",
+    "Audio/Video: cubeb",
+    "Audio/Video: GMP",
+    "Audio/Video: MediaStreamGraph",
+    "Audio/Video: Playback",
+    "Audio/Video: Recording",
+    "Web Audio",
+    "Audio/Video: Web Codecs",
+];
+
 fn cmd_fetch(start: Option<String>, end: Option<String>) -> anyhow::Result<()> {
     let client = get_client()?;
 
     let start_date = start.unwrap_or_else(|| monday_of_current_week().to_string());
     let creation_time_val = format!("{start_date}T00:00:00Z");
 
-    let params: Vec<(&str, &str)> = vec![
-        ("savedsearch", "media-meta"),
-        ("include_fields", "_default"),
+    let mut params: Vec<(&str, &str)> = vec![
+        ("product", "Core"),
+        ("assigned_to", "nobody@mozilla.org"),
+        ("keywords_type", "nowords"),
+        ("keywords", "meta"),
+        ("bug_type", "defect"),
+        ("severity", "--"),
         ("creation_time", &creation_time_val),
     ];
+    for component in TRIAGE_COMPONENTS {
+        params.push(("component", component));
+    }
+    for status in ["UNCONFIRMED", "NEW", "ASSIGNED", "REOPENED"] {
+        params.push(("status", status));
+    }
 
     let mut bugs = client.search(&params)?;
 

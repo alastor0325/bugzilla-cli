@@ -149,14 +149,14 @@ mod tests {
         let _m = server
             .mock("GET", "/bug")
             .match_query(mockito::Matcher::UrlEncoded(
-                "savedsearch".into(),
-                "media-meta".into(),
+                "component".into(),
+                "Audio/Video".into(),
             ))
             .with_body(r#"{"bugs":[{"id":1,"summary":"bug one"},{"id":2,"summary":"bug two"}]}"#)
             .with_header("content-type", "application/json")
             .create();
         let client = make_client(&server);
-        let bugs = client.search(&[("savedsearch", "media-meta")]).unwrap();
+        let bugs = client.search(&[("component", "Audio/Video")]).unwrap();
         assert_eq!(bugs.len(), 2);
         assert_eq!(bugs[0]["id"], 1);
     }
