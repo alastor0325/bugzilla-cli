@@ -172,6 +172,10 @@ fn cmd_setup() -> anyhow::Result<()> {
     );
 
     let default_triage = triage_dir().display().to_string();
+    println!();
+    println!("Local directory for storing fetched bug snapshots, pending drafts,");
+    println!("and triage reports. It will be created automatically if it doesn't exist.");
+    println!("Press Enter to accept the default, or type a different path.");
     let triage_input = prompt(&format!("Triage directory [{}]: ", default_triage))?;
     let triage_path = PathBuf::from(if triage_input.is_empty() {
         default_triage
