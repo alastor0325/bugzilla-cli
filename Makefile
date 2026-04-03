@@ -1,27 +1,24 @@
-.PHONY: install install-dev test test-all lint format check clean
+.PHONY: install build test test-all lint fmt check clean
 
 install:
-	pip install -r requirements.txt
-	ln -sf $(shell pwd)/bugzilla_cli.py ~/.local/bin/bugzilla-cli
+	cargo install --path .
 
-install-dev:
-	pip install -r requirements-dev.txt
-	pre-commit install
+build:
+	cargo build --release
 
 test:
-	pytest tests/ -x -q --ignore=tests/test_integration.py
+	cargo test --lib
 
 test-all:
-	pytest tests/ -x -q
+	cargo test
 
 lint:
-	ruff check bugzilla_cli.py tests/
+	cargo clippy -- -D warnings
 
-format:
-	ruff format bugzilla_cli.py tests/
+fmt:
+	cargo fmt
 
 check: lint test
 
 clean:
-	rm -rf __pycache__ .pytest_cache .coverage htmlcov
-	find . -name "*.pyc" -delete
+	cargo clean

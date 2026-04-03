@@ -1,14 +1,19 @@
 # bugzilla-cli
 
-Thin BMO REST client for Firefox A/V triage. No third-party Bugzilla libraries — just `requests` and your API key.
+Thin BMO REST client for Firefox A/V triage. Written in Rust using `ureq` for HTTP and `clap` for the CLI.
 
 ## Install
 
+For coworkers (no checkout required):
+
 ```bash
-pip install -r requirements.txt
-# Make the script executable and on PATH:
-chmod +x bugzilla_cli.py
-ln -s $(pwd)/bugzilla_cli.py ~/.local/bin/bugzilla-cli
+cargo install --git https://github.com/alastor0325/bugzilla-cli
+```
+
+From source:
+
+```bash
+cargo install --path .
 ```
 
 ## Setup
@@ -28,13 +33,15 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 ## Commands
 
 ```
-bugzilla-cli get <id>                          # show bug + comments
+bugzilla-cli get <id> [--no-comments]          # show bug + comments
 bugzilla-cli fetch [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                               # default start = Monday of current ISO week
 bugzilla-cli post-comment <id> <text>
-bugzilla-cli set-ni <id> <email>...            # one or many NI flags
-bugzilla-cli set-fields <id> [--priority P1] [--severity S2] [--blocks-add 123] [--keywords-add stalled]
+bugzilla-cli set-ni <id> <email>...            # one or many NI flags in one PUT
+bugzilla-cli set-fields <id> [--priority P1-P5|--] [--severity S1-S4|--]
+                              [--resolution RES] [--blocks-add N...] [--keywords-add KW...]
 bugzilla-cli apply <id>                        # apply pending/bug-{id}.json draft
-bugzilla-cli watch-add <id> --title "…" --ni <email>...
+bugzilla-cli watch-add <id> --title "..." --ni <email>...
 bugzilla-cli watch-remove <id>
 bugzilla-cli watch-poll                        # JSON: {replied, stale, removed}
 ```
@@ -42,21 +49,26 @@ bugzilla-cli watch-poll                        # JSON: {replied, stale, removed}
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
-pre-commit install
-
-make test        # unit tests only (fast)
-make test-all    # include integration tests
-make lint
-make format
+cargo test          # run all tests
+cargo clippy        # lint
+pre-commit install  # install hooks (fmt, clippy, tests, no-secrets check)
 ```
 
-TDD flow: write a failing test, run `make test` to confirm red, implement, confirm green.
+TDD flow: write a failing test, run `cargo test --lib` to confirm red, implement, confirm green.
 
 Pre-commit hooks enforce:
-- `ruff` lint + format on every commit
+- `cargo fmt` on every commit
+- `cargo clippy -D warnings` on every commit
 - Unit tests must pass before commit succeeds
 - No hardcoded API keys in source
+
+## Integration tests
+
+Real BMO calls (read-only) are skipped by default. Run with:
+
+```bash
+BUGZILLA_BOT_API_KEY=your-key cargo test -- --ignored
+```
 
 ## File layout
 

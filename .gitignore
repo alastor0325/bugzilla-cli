@@ -1,41 +1,18 @@
-# Secrets — never commit
+# Rust
+target/
+
+# Secrets
 secrets
 .env
 *.secrets
 *.key
 *.token
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-dist/
-build/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Virtual environments — the project uses .venv/ locally
-.venv/
-venv/
-env/
+# macOS
+.DS_Store
 
 # IDEs
-.DS_Store
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# Local triage state (lives in ~/firefox-triage/, not the repo)
-ni-watch.json
-bugs/
-pending/
-reports/
-archive/
