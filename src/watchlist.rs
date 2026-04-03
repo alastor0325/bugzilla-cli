@@ -259,6 +259,10 @@ mod tests {
     fn mock_bug(server: &mut Server, id: u64, flags_json: &str, comments_json: &str) {
         server
             .mock("GET", format!("/bug/{id}").as_str())
+            .match_query(mockito::Matcher::UrlEncoded(
+                "include_fields".into(),
+                "_default,flags".into(),
+            ))
             .with_body(format!(
                 r#"{{"bugs":[{{"id":{id},"summary":"Bug {id}","flags":{flags_json}}}]}}"#
             ))

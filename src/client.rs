@@ -68,7 +68,10 @@ impl BmoClient {
         bug_id: u64,
         include_comments: bool,
     ) -> anyhow::Result<serde_json::Value> {
-        let bug_resp = self.get(&format!("/bug/{bug_id}"), &[])?;
+        let bug_resp = self.get(
+            &format!("/bug/{bug_id}"),
+            &[("include_fields", "_default,flags")],
+        )?;
         let bug = bug_resp["bugs"][0].clone();
         let mut result = serde_json::json!({ "bug": bug });
         if include_comments {
@@ -114,6 +117,10 @@ mod tests {
         let mut server = Server::new();
         let _m1 = server
             .mock("GET", "/bug/123")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "include_fields".into(),
+                "_default,flags".into(),
+            ))
             .with_body(r#"{"bugs":[{"id":123,"summary":"Test bug"}]}"#)
             .with_header("content-type", "application/json")
             .create();
@@ -134,6 +141,10 @@ mod tests {
         let mut server = Server::new();
         let _m = server
             .mock("GET", "/bug/456")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "include_fields".into(),
+                "_default,flags".into(),
+            ))
             .with_body(r#"{"bugs":[{"id":456,"summary":"No comments"}]}"#)
             .with_header("content-type", "application/json")
             .create();
@@ -141,6 +152,24 @@ mod tests {
         let val = client.get_bug(456, false).unwrap();
         assert_eq!(val["bug"]["id"], 456);
         assert!(val.get("comments").is_none());
+    }
+
+    #[test]
+    fn test_get_bug_includes_flags() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/bug/789")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "include_fields".into(),
+                "_default,flags".into(),
+            ))
+            .with_body(r#"{"bugs":[{"id":789,"summary":"Flag bug","flags":[{"name":"needinfo","status":"?","requestee":"dev@mozilla.com"}]}]}"#)
+            .with_header("content-type", "application/json")
+            .create();
+        let client = make_client(&server);
+        let val = client.get_bug(789, false).unwrap();
+        assert!(val["bug"]["flags"].is_array());
+        assert_eq!(val["bug"]["flags"][0]["name"], "needinfo");
     }
 
     #[test]
