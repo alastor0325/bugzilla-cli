@@ -10,7 +10,7 @@ Development proceeds through six sequential steps: understand the task, extract 
 
 - All new or changed logic must be extracted into **pure functions** (no `get_client()`, no I/O) so they are directly testable.
 - Every pure function must have **unit tests** covering its branches. If behavior is removed, a test must assert the removal holds.
-- **`cargo test --lib` must pass** before committing. Failing tests are a hard blocker — fix them, do not work around them.
+- **`cargo test --lib --bins` must pass** before committing. Failing tests are a hard blocker — fix them, do not work around them.
 - **README.md must be updated** whenever a command is added/removed or a flag/default changes.
 
 ## Process Details
@@ -29,7 +29,7 @@ For every pure function added or changed, write unit tests in the `#[cfg(test)] 
 
 Run and confirm green:
 ```
-cargo test --lib
+cargo test --lib --bins
 ```
 
 ### Step 4 — Agent Review

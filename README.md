@@ -62,7 +62,7 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 | `bugzilla-cli set-fields <id> [options]` | Update priority, severity, resolution, blocks, keywords |
 | `bugzilla-cli apply <id>` | Apply a pending draft from `~/firefox-triage/pending/bug-{id}.json` |
 
-`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--resolution <RES>`, `--blocks-add <id>...`, `--keywords-add <kw>...`
+`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--resolution <RES>`, `--blocks-add <id>...`, `--keywords-add <kw>...`, `--cc-add <email>...`
 
 ### NI watch list
 
@@ -112,14 +112,14 @@ No `cargo install` or `make install` needed again.
 ### Other commands
 
 ```bash
-cargo test --lib     # unit tests only (fast, no network)
-cargo test           # all tests including integration
-cargo clippy         # lint
-cargo fmt            # format
-make check           # lint + unit tests together
+cargo test --lib --bins   # unit tests only (fast, no network)
+cargo test                # all tests including integration
+cargo clippy              # lint
+cargo fmt                 # format
+make check                # lint + unit tests together
 ```
 
-TDD flow: write a failing test, run `cargo test --lib` to confirm red, implement, confirm green.
+TDD flow: write a failing test, run `cargo test --lib --bins` to confirm red, implement, confirm green.
 
 Pre-commit hooks enforce:
 - `cargo fmt` on every commit

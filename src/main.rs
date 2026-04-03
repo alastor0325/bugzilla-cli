@@ -138,6 +138,9 @@ enum Commands {
         /// Add one or more keywords.
         #[arg(long, num_args = 1..)]
         keywords_add: Vec<String>,
+        /// Add one or more email addresses to the CC list.
+        #[arg(long, num_args = 1..)]
+        cc_add: Vec<String>,
     },
 
     /// Apply a pending draft from ~/firefox-triage/pending/bug-{id}.json (comment, NI, field updates).
@@ -424,15 +427,14 @@ fn cmd_set_ni(id: u64, emails: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_set_fields(
-    id: u64,
+fn build_set_fields_body(
     priority: Option<&str>,
     severity: Option<&str>,
     resolution: Option<&str>,
     blocks_add: &[u64],
     keywords_add: &[String],
-) -> anyhow::Result<()> {
-    let client = get_client()?;
+    cc_add: &[String],
+) -> serde_json::Map<String, serde_json::Value> {
     let mut body = serde_json::Map::new();
     if let Some(p) = priority {
         body.insert("priority".into(), json!(p));
@@ -449,6 +451,30 @@ fn cmd_set_fields(
     if !keywords_add.is_empty() {
         body.insert("keywords".into(), json!({"add": keywords_add}));
     }
+    if !cc_add.is_empty() {
+        body.insert("cc".into(), json!({"add": cc_add}));
+    }
+    body
+}
+
+fn cmd_set_fields(
+    id: u64,
+    priority: Option<&str>,
+    severity: Option<&str>,
+    resolution: Option<&str>,
+    blocks_add: &[u64],
+    keywords_add: &[String],
+    cc_add: &[String],
+) -> anyhow::Result<()> {
+    let client = get_client()?;
+    let body = build_set_fields_body(
+        priority,
+        severity,
+        resolution,
+        blocks_add,
+        keywords_add,
+        cc_add,
+    );
     if body.is_empty() {
         println!("Nothing to update.");
         return Ok(());
@@ -698,6 +724,51 @@ mod tests {
     }
 
     #[test]
+    fn test_build_set_fields_body_all_fields() {
+        let body = build_set_fields_body(
+            Some("P2"),
+            Some("S3"),
+            None,
+            &[10, 20],
+            &["crash".to_string()],
+            &["dev@mozilla.com".to_string()],
+        );
+        assert_eq!(body["priority"], json!("P2"));
+        assert_eq!(body["severity"], json!("S3"));
+        assert_eq!(body["blocks"], json!({"add": [10, 20]}));
+        assert_eq!(body["keywords"], json!({"add": ["crash"]}));
+        assert_eq!(body["cc"], json!({"add": ["dev@mozilla.com"]}));
+        assert!(!body.contains_key("resolution"));
+    }
+
+    #[test]
+    fn test_build_set_fields_body_cc_only() {
+        let body = build_set_fields_body(
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            &["a@b.com".to_string(), "c@d.com".to_string()],
+        );
+        assert_eq!(body["cc"], json!({"add": ["a@b.com", "c@d.com"]}));
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn test_build_set_fields_body_empty_cc_omitted() {
+        let body = build_set_fields_body(Some("P1"), None, None, &[], &[], &[]);
+        assert!(!body.contains_key("cc"));
+        assert_eq!(body["priority"], json!("P1"));
+    }
+
+    #[test]
+    fn test_build_set_fields_body_all_empty_returns_empty_map() {
+        let body = build_set_fields_body(None, None, None, &[], &[], &[]);
+        assert!(body.is_empty());
+    }
+
+    #[test]
     fn test_format_whoami() {
         let val = json!({"name": "bot@mozilla.com", "real_name": "Triage Bot", "id": 1});
         assert_eq!(format_whoami(&val), "Triage Bot <bot@mozilla.com>");
@@ -883,6 +954,7 @@ fn main() -> anyhow::Result<()> {
             resolution,
             blocks_add,
             keywords_add,
+            cc_add,
         } => {
             cmd_set_fields(
                 id,
@@ -891,6 +963,7 @@ fn main() -> anyhow::Result<()> {
                 resolution.as_deref(),
                 &blocks_add,
                 &keywords_add,
+                &cc_add,
             )?;
         }
         Commands::Apply { id } => cmd_apply(id)?,

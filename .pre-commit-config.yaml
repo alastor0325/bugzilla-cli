@@ -15,7 +15,7 @@ repos:
         always_run: true
       - id: cargo-test
         name: cargo test (unit)
-        entry: cargo test --lib
+        entry: cargo test --lib --bins
         language: system
         pass_filenames: false
         always_run: true
