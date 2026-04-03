@@ -190,6 +190,32 @@ mod tests {
     }
 
     #[test]
+    fn test_search_by_summary() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/bug")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("f1".into(), "short_desc".into()),
+                mockito::Matcher::UrlEncoded("o1".into(), "substring".into()),
+                mockito::Matcher::UrlEncoded("v1".into(), "mp4 crash".into()),
+            ]))
+            .with_body(r#"{"bugs":[{"id":100,"summary":"mp4 crash on startup","status":"NEW","priority":"P2"}]}"#)
+            .with_header("content-type", "application/json")
+            .create();
+        let client = make_client(&server);
+        let bugs = client
+            .search(&[
+                ("f1", "short_desc"),
+                ("o1", "substring"),
+                ("v1", "mp4 crash"),
+            ])
+            .unwrap();
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0]["summary"], "mp4 crash on startup");
+        assert_eq!(bugs[0]["status"], "NEW");
+    }
+
+    #[test]
     fn test_http_error() {
         let mut server = Server::new();
         let _m = server

@@ -36,6 +36,12 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 bugzilla-cli get <id> [--no-comments]          # show bug + comments
 bugzilla-cli fetch [--start YYYY-MM-DD] [--end YYYY-MM-DD]
                                                # default start = Monday of current ISO week
+bugzilla-cli search <query>                    # search open bugs by summary substring
+             [--component <comp>...]           # filter by component (repeatable)
+             [--product <product>]             # filter by product (default: all)
+             [--limit <n>]                     # max results (default: 25)
+             [--full-text]                     # also search comments/description
+             [--all-statuses]                  # include resolved bugs (default: open only)
 bugzilla-cli post-comment <id> <text>
 bugzilla-cli set-ni <id> <email>...            # one or many NI flags in one PUT
 bugzilla-cli set-fields <id> [--priority P1-P5|--] [--severity S1-S4|--]
@@ -44,6 +50,25 @@ bugzilla-cli apply <id>                        # apply pending/bug-{id}.json dra
 bugzilla-cli watch-add <id> --title "..." --ni <email>...
 bugzilla-cli watch-remove <id>
 bugzilla-cli watch-poll                        # JSON: {replied, stale, removed}
+```
+
+### search examples
+
+```bash
+# Find open duplicates by title keyword
+bugzilla-cli search "mp4 crash"
+
+# Narrow to a component
+bugzilla-cli search "seek" --component "Audio/Video: Playback"
+
+# Multiple components
+bugzilla-cli search "decode" --component "Audio/Video: Playback" --component "Audio/Video: Web Codecs"
+
+# Also search comments (slower, more results)
+bugzilla-cli search "NS_ERROR_FAILURE" --full-text
+
+# Include already-fixed bugs
+bugzilla-cli search "mp4 crash" --all-statuses --limit 50
 ```
 
 ## Development

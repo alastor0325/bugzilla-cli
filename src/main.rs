@@ -137,6 +137,20 @@ enum Commands {
     },
 
     WatchPoll,
+
+    Search {
+        query: String,
+        #[arg(long, num_args = 1..)]
+        component: Vec<String>,
+        #[arg(long)]
+        product: Option<String>,
+        #[arg(long, default_value = "25")]
+        limit: u32,
+        #[arg(long)]
+        full_text: bool,
+        #[arg(long)]
+        all_statuses: bool,
+    },
 }
 
 fn cmd_setup() -> anyhow::Result<()> {
@@ -497,6 +511,163 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn build_search_params(
+    query: &str,
+    components: &[String],
+    product: Option<&str>,
+    limit: u32,
+    full_text: bool,
+    all_statuses: bool,
+) -> Vec<(String, String)> {
+    let mut params: Vec<(String, String)> = vec![
+        ("query_format".into(), "advanced".into()),
+        ("limit".into(), limit.to_string()),
+    ];
+
+    if full_text {
+        // OR group: match summary or comments/description
+        params.extend([
+            ("f1".into(), "OP".into()),
+            ("j1".into(), "OR".into()),
+            ("f2".into(), "short_desc".into()),
+            ("o2".into(), "substring".into()),
+            ("v2".into(), query.into()),
+            ("f3".into(), "longdesc".into()),
+            ("o3".into(), "substring".into()),
+            ("v3".into(), query.into()),
+            ("f4".into(), "CP".into()),
+        ]);
+    } else {
+        params.extend([
+            ("f1".into(), "short_desc".into()),
+            ("o1".into(), "substring".into()),
+            ("v1".into(), query.into()),
+        ]);
+    }
+
+    if !all_statuses {
+        for status in ["UNCONFIRMED", "NEW", "ASSIGNED", "REOPENED"] {
+            params.push(("bug_status".into(), status.into()));
+        }
+    }
+
+    for component in components {
+        params.push(("component".into(), component.clone()));
+    }
+
+    if let Some(p) = product {
+        params.push(("product".into(), p.into()));
+    }
+
+    params
+}
+
+fn cmd_search(
+    query: &str,
+    components: &[String],
+    product: Option<&str>,
+    limit: u32,
+    full_text: bool,
+    all_statuses: bool,
+) -> anyhow::Result<()> {
+    let client = get_client()?;
+    let params = build_search_params(query, components, product, limit, full_text, all_statuses);
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let bugs = client.search(&param_refs)?;
+
+    for bug in &bugs {
+        let id = bug["id"].as_u64().unwrap_or(0);
+        let summary = bug["summary"].as_str().unwrap_or("?");
+        let status = bug["status"].as_str().unwrap_or("?");
+        let priority = bug["priority"].as_str().unwrap_or("--");
+        println!("Bug {id}: [{status} {priority}] {summary}");
+    }
+    eprintln!("\n# {} bug(s) found", bugs.len());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn param(params: &[(String, String)], key: &str) -> Option<String> {
+        params
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn all_values<'a>(params: &'a [(String, String)], key: &str) -> Vec<&'a str> {
+        params
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn test_search_params_default() {
+        let params = build_search_params("mp4 crash", &[], None, 25, false, false);
+        // summary-only
+        assert_eq!(param(&params, "f1").as_deref(), Some("short_desc"));
+        assert_eq!(param(&params, "o1").as_deref(), Some("substring"));
+        assert_eq!(param(&params, "v1").as_deref(), Some("mp4 crash"));
+        // no OR group
+        assert!(param(&params, "f3").is_none());
+        // open statuses included
+        let statuses = all_values(&params, "bug_status");
+        assert!(statuses.contains(&"NEW"));
+        assert!(statuses.contains(&"UNCONFIRMED"));
+        assert!(statuses.contains(&"ASSIGNED"));
+        assert!(statuses.contains(&"REOPENED"));
+        // default limit
+        assert_eq!(param(&params, "limit").as_deref(), Some("25"));
+    }
+
+    #[test]
+    fn test_search_params_full_text() {
+        let params = build_search_params("NS_ERROR_FAILURE", &[], None, 25, true, false);
+        assert_eq!(param(&params, "f1").as_deref(), Some("OP"));
+        assert_eq!(param(&params, "j1").as_deref(), Some("OR"));
+        assert_eq!(param(&params, "f2").as_deref(), Some("short_desc"));
+        assert_eq!(param(&params, "o2").as_deref(), Some("substring"));
+        assert_eq!(param(&params, "v2").as_deref(), Some("NS_ERROR_FAILURE"));
+        assert_eq!(param(&params, "f3").as_deref(), Some("longdesc"));
+        assert_eq!(param(&params, "o3").as_deref(), Some("substring"));
+        assert_eq!(param(&params, "v3").as_deref(), Some("NS_ERROR_FAILURE"));
+        assert_eq!(param(&params, "f4").as_deref(), Some("CP"));
+    }
+
+    #[test]
+    fn test_search_params_all_statuses() {
+        let params = build_search_params("crash", &[], None, 25, false, true);
+        assert!(all_values(&params, "bug_status").is_empty());
+    }
+
+    #[test]
+    fn test_search_params_components_and_product() {
+        let components = vec![
+            "Audio/Video: Playback".to_string(),
+            "Audio/Video: Web Codecs".to_string(),
+        ];
+        let params = build_search_params("decode", &components, Some("Core"), 10, false, false);
+        let comps = all_values(&params, "component");
+        assert!(comps.contains(&"Audio/Video: Playback"));
+        assert!(comps.contains(&"Audio/Video: Web Codecs"));
+        assert_eq!(param(&params, "product").as_deref(), Some("Core"));
+        assert_eq!(param(&params, "limit").as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn test_search_params_no_product() {
+        let params = build_search_params("crash", &[], None, 25, false, false);
+        assert!(param(&params, "product").is_none());
+    }
+}
+
 fn cmd_watch_add(id: u64, title: &str, ni: &[String]) -> anyhow::Result<()> {
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     WatchList::load(&watch_file_path())?.add(&id.to_string(), title, ni, &now)?;
@@ -555,6 +726,21 @@ fn main() -> anyhow::Result<()> {
         Commands::WatchAdd { id, title, ni } => cmd_watch_add(id, &title, &ni)?,
         Commands::WatchRemove { id } => cmd_watch_remove(id)?,
         Commands::WatchPoll => cmd_watch_poll()?,
+        Commands::Search {
+            query,
+            component,
+            product,
+            limit,
+            full_text,
+            all_statuses,
+        } => cmd_search(
+            &query,
+            &component,
+            product.as_deref(),
+            limit,
+            full_text,
+            all_statuses,
+        )?,
     }
     Ok(())
 }
