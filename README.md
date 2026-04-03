@@ -1,6 +1,6 @@
 # bugzilla-cli
 
-Thin BMO REST client for Firefox A/V triage. Written in Rust using `ureq` for HTTP and `clap` for the CLI.
+Thin BMO REST client. Written in Rust using `ureq` for HTTP and `clap` for the CLI.
 
 ## Install
 

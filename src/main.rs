@@ -72,10 +72,7 @@ fn prompt(label: &str) -> anyhow::Result<String> {
 }
 
 #[derive(Parser)]
-#[command(
-    name = "bugzilla-cli",
-    about = "Thin BMO REST client for Firefox A/V triage."
-)]
+#[command(name = "bugzilla-cli", about = "Thin BMO REST client.")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
