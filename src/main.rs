@@ -243,48 +243,60 @@ fn cmd_setup() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn format_bug_header(bug: &serde_json::Value) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Bug {}: {}\n",
+        bug["id"],
+        bug["summary"].as_str().unwrap_or("?")
+    ));
+    out.push_str(&format!(
+        "  Status:   {} {}\n",
+        bug["status"].as_str().unwrap_or("?"),
+        bug["resolution"].as_str().unwrap_or("")
+    ));
+    out.push_str(&format!(
+        "  Priority: {}  Severity: {}\n",
+        bug["priority"].as_str().unwrap_or("?"),
+        bug["severity"].as_str().unwrap_or("?")
+    ));
+    out.push_str(&format!(
+        "  Assigned: {}\n",
+        bug["assigned_to"].as_str().unwrap_or("?")
+    ));
+    out.push_str(&format!(
+        "  Creator:  {} ({})\n",
+        bug["creator"].as_str().unwrap_or("?"),
+        bug["creator_detail"]["real_name"].as_str().unwrap_or("?")
+    ));
+    let qa_wb = bug["cf_qa_whiteboard"].as_str().unwrap_or("");
+    if !qa_wb.is_empty() {
+        out.push_str(&format!("  QA:       {qa_wb}\n"));
+    }
+    out
+}
+
+fn format_comments(comments: &[serde_json::Value]) -> String {
+    let mut out = format!("\n--- {} comment(s) ---", comments.len());
+    for c in comments {
+        out.push_str(&format!(
+            "\n\n[{}] {}:\n{}",
+            c["creation_time"].as_str().unwrap_or("?"),
+            c["creator"].as_str().unwrap_or("?"),
+            c["text"].as_str().unwrap_or("")
+        ));
+    }
+    out
+}
+
 fn cmd_get(id: u64, comments: bool) -> anyhow::Result<()> {
     let client = get_client()?;
     let data = client.get_bug(id, comments)?;
-    let bug = &data["bug"];
-    println!(
-        "Bug {}: {}",
-        bug["id"],
-        bug["summary"].as_str().unwrap_or("?")
-    );
-    println!(
-        "  Status:   {} {}",
-        bug["status"].as_str().unwrap_or("?"),
-        bug["resolution"].as_str().unwrap_or("")
-    );
-    println!(
-        "  Priority: {}  Severity: {}",
-        bug["priority"].as_str().unwrap_or("?"),
-        bug["severity"].as_str().unwrap_or("?")
-    );
-    println!("  Assigned: {}", bug["assigned_to"].as_str().unwrap_or("?"));
-    println!(
-        "  Creator:  {} ({})",
-        bug["creator"].as_str().unwrap_or("?"),
-        bug["creator_detail"]["real_name"].as_str().unwrap_or("?")
-    );
-    let qa_wb = bug["cf_qa_whiteboard"].as_str().unwrap_or("");
-    if !qa_wb.is_empty() {
-        println!("  QA:       {qa_wb}");
-    }
+    print!("{}", format_bug_header(&data["bug"]));
     if comments {
         let empty = vec![];
         let clist = data["comments"].as_array().unwrap_or(&empty);
-        println!("\n--- {} comment(s) ---", clist.len());
-        for c in clist {
-            println!(
-                "\n[{}] {}:",
-                c["creation_time"].as_str().unwrap_or("?"),
-                c["creator"].as_str().unwrap_or("?")
-            );
-            let text = c["text"].as_str().unwrap_or("");
-            println!("{text}");
-        }
+        println!("{}", format_comments(clist));
     }
     Ok(())
 }
@@ -587,6 +599,62 @@ fn cmd_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_format_bug_header_basic() {
+        let bug = json!({
+            "id": 123,
+            "summary": "Video playback crash",
+            "status": "NEW",
+            "resolution": "",
+            "priority": "P2",
+            "severity": "S2",
+            "assigned_to": "nobody@mozilla.org",
+            "creator": "reporter@example.com",
+            "creator_detail": {"real_name": "A Reporter"},
+            "cf_qa_whiteboard": ""
+        });
+        let out = format_bug_header(&bug);
+        assert!(out.contains("Bug 123: Video playback crash"));
+        assert!(out.contains("Status:   NEW"));
+        assert!(out.contains("Priority: P2  Severity: S2"));
+        assert!(out.contains("Assigned: nobody@mozilla.org"));
+        assert!(out.contains("Creator:  reporter@example.com (A Reporter)"));
+        assert!(!out.contains("QA:"));
+    }
+
+    #[test]
+    fn test_format_bug_header_shows_qa_whiteboard() {
+        let bug = json!({
+            "id": 1, "summary": "s", "status": "NEW", "resolution": "",
+            "priority": "--", "severity": "--",
+            "assigned_to": "nobody@mozilla.org",
+            "creator": "x@x.com", "creator_detail": {"real_name": "X"},
+            "cf_qa_whiteboard": "verified-upstream"
+        });
+        let out = format_bug_header(&bug);
+        assert!(out.contains("QA:       verified-upstream"));
+    }
+
+    #[test]
+    fn test_format_comments_full_text() {
+        let comments = vec![json!({
+            "creation_time": "2026-01-01T00:00:00Z",
+            "creator": "dev@mozilla.com",
+            "text": "a".repeat(600)
+        })];
+        let out = format_comments(&comments);
+        assert!(out.contains("1 comment(s)"));
+        // full text — no truncation
+        assert!(out.contains(&"a".repeat(600)));
+    }
+
+    #[test]
+    fn test_format_comments_empty() {
+        let out = format_comments(&[]);
+        assert!(out.contains("0 comment(s)"));
+    }
 
     fn param(params: &[(String, String)], key: &str) -> Option<String> {
         params
