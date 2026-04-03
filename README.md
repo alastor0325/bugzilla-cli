@@ -33,6 +33,7 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 ## Commands
 
 ```
+bugzilla-cli whoami                                # print the login tied to the stored API key
 bugzilla-cli get <id> [--no-comments]          # show bug + comments
 bugzilla-cli fetch [--start YYYY-MM-DD] [--end YYYY-MM-DD]
                                                # default start = Monday of current ISO week

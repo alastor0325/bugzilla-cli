@@ -138,6 +138,8 @@ enum Commands {
 
     WatchPoll,
 
+    Whoami,
+
     Search {
         query: String,
         #[arg(long, num_args = 1..)]
@@ -190,11 +192,7 @@ fn cmd_setup() -> anyhow::Result<()> {
     print!("  Verifying... ");
     io::stdout().flush()?;
     let me = test_client.whoami().context("Authentication failed")?;
-    println!(
-        "\u{2713} Authenticated as {} <{}>",
-        me["real_name"].as_str().unwrap_or("?"),
-        me["name"].as_str().unwrap_or("?")
-    );
+    println!("\u{2713} Authenticated as {}", format_whoami(&me));
 
     // Step 3: Triage directory
     let default_triage = triage_dir().display().to_string();
@@ -518,6 +516,21 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn format_whoami(val: &serde_json::Value) -> String {
+    format!(
+        "{} <{}>",
+        val["real_name"].as_str().unwrap_or("?"),
+        val["name"].as_str().unwrap_or("?")
+    )
+}
+
+fn cmd_whoami() -> anyhow::Result<()> {
+    let client = get_client()?;
+    let val = client.whoami()?;
+    println!("{}", format_whoami(&val));
+    Ok(())
+}
+
 fn build_search_params(
     query: &str,
     components: &[String],
@@ -600,6 +613,18 @@ fn cmd_search(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_format_whoami() {
+        let val = json!({"name": "bot@mozilla.com", "real_name": "Triage Bot", "id": 1});
+        assert_eq!(format_whoami(&val), "Triage Bot <bot@mozilla.com>");
+    }
+
+    #[test]
+    fn test_format_whoami_missing_fields() {
+        let val = json!({});
+        assert_eq!(format_whoami(&val), "? <?>");
+    }
 
     #[test]
     fn test_format_bug_header_basic() {
@@ -788,6 +813,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Apply { id } => cmd_apply(id)?,
         Commands::WatchAdd { id, title, ni } => cmd_watch_add(id, &title, &ni)?,
         Commands::WatchRemove { id } => cmd_watch_remove(id)?,
+        Commands::Whoami => cmd_whoami()?,
         Commands::WatchPoll => cmd_watch_poll()?,
         Commands::Search {
             query,
