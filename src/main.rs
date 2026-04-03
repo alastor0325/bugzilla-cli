@@ -286,37 +286,48 @@ fn cmd_fetch(start: Option<String>, end: Option<String>) -> anyhow::Result<()> {
     let client = get_client()?;
 
     let start_date = start.unwrap_or_else(|| monday_of_current_week().to_string());
-    let creation_time_val = format!("{start_date}T00:00:00Z");
+    let end_date =
+        end.unwrap_or_else(|| (monday_of_current_week() + chrono::Duration::days(7)).to_string());
 
+    // Use Bugzilla advanced query format, mirroring the canonical triage search URL.
     let mut params: Vec<(&str, &str)> = vec![
-        ("product", "Core"),
-        ("assigned_to", "nobody@mozilla.org"),
+        ("query_format", "advanced"),
+        ("emailassigned_to1", "1"),
+        ("email1", "nobody@mozilla.org"),
+        ("emailtype1", "exact"),
         ("keywords_type", "nowords"),
         ("keywords", "meta"),
-        ("bug_type", "defect"),
-        ("severity", "--"),
-        ("creation_time", &creation_time_val),
+        // f1/f4: open/close paren grouping for date range
+        ("f1", "OP"),
+        ("f2", "creation_ts"),
+        ("o2", "changedafter"),
+        ("v2", &start_date),
+        ("f3", "creation_ts"),
+        ("o3", "changedafter"),
+        ("n3", "1"),
+        ("v3", &end_date),
+        ("f4", "CP"),
+        // severity not yet set
+        ("f5", "bug_severity"),
+        ("o5", "equals"),
+        ("v5", "--"),
+        // defects only
+        ("f6", "bug_type"),
+        ("o6", "equals"),
+        ("v6", "defect"),
+        // exclude security bugs
+        ("f9", "bug_group"),
+        ("o9", "notsubstring"),
+        ("v9", "core-security"),
     ];
     for component in TRIAGE_COMPONENTS {
         params.push(("component", component));
     }
     for status in ["UNCONFIRMED", "NEW", "ASSIGNED", "REOPENED"] {
-        params.push(("status", status));
+        params.push(("bug_status", status));
     }
 
     let mut bugs = client.search(&params)?;
-
-    if let Some(end_str) = &end {
-        let end_dt: NaiveDate = end_str.parse().context("invalid end date")?;
-        bugs.retain(|b| {
-            let ct = b["creation_time"].as_str().unwrap_or("");
-            let date_part = ct.get(..10).unwrap_or("");
-            date_part
-                .parse::<NaiveDate>()
-                .map(|d| d <= end_dt)
-                .unwrap_or(false)
-        });
-    }
 
     bugs.sort_by(|a, b| {
         let ta = a["creation_time"].as_str().unwrap_or("");
