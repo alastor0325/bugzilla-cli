@@ -424,6 +424,28 @@ fn cmd_set_fields(
     Ok(())
 }
 
+fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let mut body = serde_json::Map::new();
+    for field in ["priority", "severity", "resolution"] {
+        if let Some(v) = draft[field]
+            .as_str()
+            .filter(|s| !s.is_empty() && *s != "null")
+        {
+            body.insert(field.into(), json!(v));
+        }
+    }
+    if let Some(arr) = draft["blocks_add"].as_array().filter(|a| !a.is_empty()) {
+        body.insert("blocks".into(), json!({"add": arr}));
+    }
+    if let Some(arr) = draft["keywords_add"].as_array().filter(|a| !a.is_empty()) {
+        body.insert("keywords".into(), json!({"add": arr}));
+    }
+    if let Some(arr) = draft["cc_add"].as_array().filter(|a| !a.is_empty()) {
+        body.insert("cc".into(), json!({"add": arr}));
+    }
+    body
+}
+
 fn cmd_apply(id: u64) -> anyhow::Result<()> {
     let client = get_client()?;
     let pending_file = triage_dir().join("pending").join(format!("bug-{id}.json"));
@@ -445,8 +467,12 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     println!("Comment:\n{}", draft["comment"].as_str().unwrap_or(""));
     println!("NI targets: {}", draft["ni_targets"]);
     println!(
-        "Fields: priority={}, severity={}, blocks_add={}, keywords_add={}",
-        draft["priority"], draft["severity"], draft["blocks_add"], draft["keywords_add"]
+        "Fields: priority={}, severity={}, blocks_add={}, keywords_add={}, cc_add={}",
+        draft["priority"],
+        draft["severity"],
+        draft["blocks_add"],
+        draft["keywords_add"],
+        draft["cc_add"]
     );
 
     let confirm = prompt("\nApply? [y/N] ")?;
@@ -464,31 +490,7 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
         )?;
     }
 
-    let mut field_body = serde_json::Map::new();
-    if let Some(p) = draft["priority"]
-        .as_str()
-        .filter(|s| !s.is_empty() && *s != "null")
-    {
-        field_body.insert("priority".into(), json!(p));
-    }
-    if let Some(s) = draft["severity"]
-        .as_str()
-        .filter(|s| !s.is_empty() && *s != "null")
-    {
-        field_body.insert("severity".into(), json!(s));
-    }
-    if let Some(r) = draft["resolution"]
-        .as_str()
-        .filter(|s| !s.is_empty() && *s != "null")
-    {
-        field_body.insert("resolution".into(), json!(r));
-    }
-    if let Some(arr) = draft["blocks_add"].as_array().filter(|a| !a.is_empty()) {
-        field_body.insert("blocks".into(), json!({"add": arr}));
-    }
-    if let Some(arr) = draft["keywords_add"].as_array().filter(|a| !a.is_empty()) {
-        field_body.insert("keywords".into(), json!({"add": arr}));
-    }
+    let field_body = build_apply_field_body(&draft);
     if !field_body.is_empty() {
         client.put(
             &format!("/bug/{bug_id}"),
@@ -613,6 +615,50 @@ fn cmd_search(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_build_apply_field_body_all_fields() {
+        let draft = json!({
+            "priority": "P2",
+            "severity": "S2",
+            "resolution": "FIXED",
+            "blocks_add": [123u64],
+            "keywords_add": ["regression"],
+            "cc_add": ["dev@mozilla.com"]
+        });
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["priority"], json!("P2"));
+        assert_eq!(body["severity"], json!("S2"));
+        assert_eq!(body["resolution"], json!("FIXED"));
+        assert_eq!(body["blocks"], json!({"add": [123u64]}));
+        assert_eq!(body["keywords"], json!({"add": ["regression"]}));
+        assert_eq!(body["cc"], json!({"add": ["dev@mozilla.com"]}));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_cc_add_only() {
+        let draft = json!({"cc_add": ["a@b.com", "c@d.com"]});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["cc"], json!({"add": ["a@b.com", "c@d.com"]}));
+        assert!(!body.contains_key("priority"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_empty_cc_omitted() {
+        let draft = json!({"cc_add": [], "priority": "P1"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("cc"));
+        assert_eq!(body["priority"], json!("P1"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_null_strings_omitted() {
+        let draft = json!({"priority": "null", "severity": "", "resolution": "FIXED"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("priority"));
+        assert!(!body.contains_key("severity"));
+        assert_eq!(body["resolution"], json!("FIXED"));
+    }
 
     #[test]
     fn test_format_whoami() {
