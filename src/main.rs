@@ -142,8 +142,13 @@ enum Commands {
 fn cmd_setup() -> anyhow::Result<()> {
     println!("=== bugzilla-cli setup ===");
 
+    // Step 1: BMO URL
+    println!();
+    println!("Step 1: BMO server URL");
+    println!("  This is the base URL of the Bugzilla instance you want to connect to.");
+    println!("  For Mozilla's BMO, just press Enter to accept the default.");
     let url_input = prompt(&format!(
-        "BMO URL (press Enter for default: {}): ",
+        "  BMO URL (press Enter for default: {}): ",
         BMO_BASE
     ))?;
     let url = if url_input.is_empty() {
@@ -156,27 +161,35 @@ fn cmd_setup() -> anyhow::Result<()> {
             format!("{trimmed}/rest")
         }
     };
+    println!("  \u{2713} Using {url}");
 
-    let api_key = prompt("API key: ")?;
+    // Step 2: API key
+    println!();
+    println!("Step 2: BMO API key");
+    println!("  Generate one at: https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey");
+    println!("  The key will be verified against BMO before being saved.");
+    let api_key = prompt("  API key: ")?;
     if api_key.is_empty() {
         anyhow::bail!("API key is required.");
     }
-
     let test_client = BmoClient::new_with_base(&api_key, &url);
-    println!("Verifying API key with BMO...");
+    print!("  Verifying... ");
+    io::stdout().flush()?;
     let me = test_client.whoami().context("Authentication failed")?;
     println!(
-        "Authenticated as: {} <{}>",
+        "\u{2713} Authenticated as {} <{}>",
         me["real_name"].as_str().unwrap_or("?"),
         me["name"].as_str().unwrap_or("?")
     );
 
+    // Step 3: Triage directory
     let default_triage = triage_dir().display().to_string();
     println!();
-    println!("Local directory for storing fetched bug snapshots, pending drafts,");
-    println!("and triage reports. It will be created automatically if it doesn't exist.");
-    println!("Press Enter to accept the default, or type a different path.");
-    let triage_input = prompt(&format!("Triage directory [{}]: ", default_triage))?;
+    println!("Step 3: Local triage directory");
+    println!("  A local folder where fetched bug snapshots, pending comment drafts,");
+    println!("  and triage reports will be stored. Created automatically if it doesn't exist.");
+    println!("  Press Enter to accept the default, or type a different path.");
+    let triage_input = prompt(&format!("  Triage directory [{}]: ", default_triage))?;
     let triage_path = PathBuf::from(if triage_input.is_empty() {
         default_triage
     } else {
@@ -185,8 +198,16 @@ fn cmd_setup() -> anyhow::Result<()> {
     for sub in ["bugs", "pending", "reports", "archive"] {
         std::fs::create_dir_all(triage_path.join(sub))?;
     }
-    println!("Created triage directories under {}", triage_path.display());
+    println!(
+        "  \u{2713} Directories created under {}",
+        triage_path.display()
+    );
 
+    // Step 4: Secrets file
+    println!();
+    println!("Step 4: Saving credentials");
+    println!("  Your API key will be written to ~/.config/triage/secrets (chmod 600).");
+    println!("  That file is outside this repo and never committed.");
     let secrets_file = dirs::home_dir().unwrap().join(".config/triage/secrets");
     std::fs::create_dir_all(secrets_file.parent().unwrap())?;
     std::fs::write(
@@ -198,7 +219,7 @@ fn cmd_setup() -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&secrets_file, std::fs::Permissions::from_mode(0o600))?;
     }
-    println!("API key written to {} (chmod 600)", secrets_file.display());
+    println!("  \u{2713} API key saved to {}", secrets_file.display());
 
     println!();
     println!("Add this to your ~/.zshrc:");
