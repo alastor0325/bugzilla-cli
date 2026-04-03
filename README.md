@@ -48,10 +48,39 @@ bugzilla-cli watch-poll                        # JSON: {replied, stale, removed}
 
 ## Development
 
+### One-time setup
+
 ```bash
-cargo test          # run all tests
-cargo clippy        # lint
-pre-commit install  # install hooks (fmt, clippy, tests, no-secrets check)
+# Clone and enter the repo
+git clone https://github.com/alastor0325/bugzilla-cli
+cd bugzilla-cli
+
+# Install dev hooks
+pre-commit install
+
+# Build and symlink the binary into PATH (no cargo install needed)
+make install
+```
+
+`make install` symlinks `target/debug/bugzilla-cli` into `~/.local/bin/`. Make sure `~/.local/bin` is on your `PATH`.
+
+### After fixing a bug
+
+```bash
+cargo build          # recompile — the symlink picks up the new binary automatically
+bugzilla-cli ...     # immediately uses the updated binary
+```
+
+No `cargo install` or `make install` needed again.
+
+### Other commands
+
+```bash
+cargo test --lib     # unit tests only (fast, no network)
+cargo test           # all tests including integration
+cargo clippy         # lint
+cargo fmt            # format
+make check           # lint + unit tests together
 ```
 
 TDD flow: write a failing test, run `cargo test --lib` to confirm red, implement, confirm green.
