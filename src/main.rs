@@ -27,11 +27,40 @@ fn monday_of_current_week() -> NaiveDate {
     today - chrono::Duration::days(days_from_monday as i64)
 }
 
+fn read_secrets_file() -> Option<String> {
+    let path = dirs::home_dir()?.join(".config/triage/secrets");
+    let content = std::fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let kv = trimmed
+            .strip_prefix("export ")
+            .unwrap_or(trimmed);
+        if let Some(val) = kv.strip_prefix("BUGZILLA_BOT_API_KEY=") {
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn get_client() -> anyhow::Result<BmoClient> {
-    let api_key = std::env::var("BUGZILLA_BOT_API_KEY").map_err(|_| {
-        anyhow::anyhow!("BUGZILLA_BOT_API_KEY is not set. Run 'bugzilla-cli setup' first.")
-    })?;
-    Ok(BmoClient::new(&api_key))
+    // 1. Env var (set after `source ~/.config/triage/secrets`)
+    if let Ok(key) = std::env::var("BUGZILLA_BOT_API_KEY") {
+        if !key.is_empty() {
+            return Ok(BmoClient::new(&key));
+        }
+    }
+    // 2. Secrets file exists but wasn't sourced in this shell
+    if let Some(key) = read_secrets_file() {
+        return Ok(BmoClient::new(&key));
+    }
+    // 3. Not configured at all — auto-run setup wizard
+    println!("bugzilla-cli is not configured yet. Starting setup...\n");
+    cmd_setup()?;
+    let key = read_secrets_file()
+        .ok_or_else(|| anyhow::anyhow!("Setup completed but could not read key from secrets file."))?;
+    Ok(BmoClient::new(&key))
 }
 
 fn prompt(label: &str) -> anyhow::Result<String> {
