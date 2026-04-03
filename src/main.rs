@@ -283,12 +283,7 @@ fn cmd_get(id: u64, comments: bool) -> anyhow::Result<()> {
                 c["creator"].as_str().unwrap_or("?")
             );
             let text = c["text"].as_str().unwrap_or("");
-            if text.len() > 500 {
-                print!("{}", &text[..500]);
-                println!("...");
-            } else {
-                println!("{text}");
-            }
+            println!("{text}");
         }
     }
     Ok(())
