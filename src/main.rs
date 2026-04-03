@@ -451,11 +451,12 @@ fn cmd_watch_poll() -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    if !matches!(cli.command, Commands::Setup) && !is_configured() {
+    if !is_configured() {
         println!("bugzilla-cli is not configured yet. Starting setup...\n");
         cmd_setup()?;
+        println!();
     }
+    let cli = Cli::parse();
     match cli.command {
         Commands::Setup => cmd_setup()?,
         Commands::Get { id, comments } => cmd_get(id, comments)?,
