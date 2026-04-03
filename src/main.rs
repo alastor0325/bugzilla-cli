@@ -195,7 +195,7 @@ fn cmd_setup() -> anyhow::Result<()> {
     } else {
         triage_input
     });
-    for sub in ["bugs", "pending", "reports", "archive"] {
+    for sub in ["bugs", "pending", "reports", "archive", "knowledge"] {
         std::fs::create_dir_all(triage_path.join(sub))?;
     }
     println!(
