@@ -32,43 +32,53 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 
 ## Commands
 
-```
-bugzilla-cli whoami                                # print the login tied to the stored API key
-bugzilla-cli get <id> [--no-comments]          # show bug + comments
-bugzilla-cli fetch [--start YYYY-MM-DD] [--end YYYY-MM-DD]
-                                               # default start = Monday of current ISO week
-bugzilla-cli search <query>                    # search open bugs by summary substring
-             [--component <comp>...]           # filter by component (repeatable)
-             [--product <product>]             # filter by product (default: all)
-             [--limit <n>]                     # max results (default: 25)
-             [--full-text]                     # also search comments/description
-             [--all-statuses]                  # include resolved bugs (default: open only)
-bugzilla-cli post-comment <id> <text>
-bugzilla-cli set-ni <id> <email>...            # one or many NI flags in one PUT
-bugzilla-cli set-fields <id> [--priority P1-P5|--] [--severity S1-S4|--]
-                              [--resolution RES] [--blocks-add N...] [--keywords-add KW...]
-bugzilla-cli apply <id>                        # apply pending/bug-{id}.json draft
-bugzilla-cli watch-add <id> --title "..." --ni <email>...
-bugzilla-cli watch-remove <id>
-bugzilla-cli watch-poll                        # JSON: {replied, stale, removed}
-```
+### Identity
+
+| Command | Description |
+|---------|-------------|
+| `bugzilla-cli whoami` | Print the BMO login (email) tied to the stored API key |
+| `bugzilla-cli setup` | Interactive wizard: API key, triage directory, secrets file |
+
+### Reading bugs
+
+| Command | Description |
+|---------|-------------|
+| `bugzilla-cli get <id>` | Show bug metadata and full comment thread |
+| `bugzilla-cli get <id> --no-comments` | Show bug metadata only |
+| `bugzilla-cli fetch` | Fetch triage-queue bugs from the current ISO week |
+| `bugzilla-cli fetch --start YYYY-MM-DD --end YYYY-MM-DD` | Fetch bugs in a custom date range |
+| `bugzilla-cli search <query>` | Search open bugs by summary substring (default: up to 25 results) |
+| `bugzilla-cli search <query> --component <comp>` | Narrow to one or more components (flag is repeatable) |
+| `bugzilla-cli search <query> --full-text` | Also search comments and descriptions |
+| `bugzilla-cli search <query> --all-statuses` | Include resolved/closed bugs |
+| `bugzilla-cli search <query> --limit <n>` | Cap result count |
+
+### Writing bugs
+
+| Command | Description |
+|---------|-------------|
+| `bugzilla-cli post-comment <id> <text>` | Post a comment |
+| `bugzilla-cli set-ni <id> <email>...` | Set needinfo flags (one PUT, multiple recipients) |
+| `bugzilla-cli set-fields <id> [options]` | Update priority, severity, resolution, blocks, keywords |
+| `bugzilla-cli apply <id>` | Apply a pending draft from `~/firefox-triage/pending/bug-{id}.json` |
+
+`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--resolution <RES>`, `--blocks-add <id>...`, `--keywords-add <kw>...`
+
+### NI watch list
+
+| Command | Description |
+|---------|-------------|
+| `bugzilla-cli watch-add <id> --title "..." --ni <email>...` | Start watching a bug for needinfo replies |
+| `bugzilla-cli watch-remove <id>` | Stop watching a bug |
+| `bugzilla-cli watch-poll` | Check all watched bugs; reports `replied`, `stale` (≥7 days), `removed` |
 
 ### search examples
 
 ```bash
-# Find open duplicates by title keyword
 bugzilla-cli search "mp4 crash"
-
-# Narrow to a component
 bugzilla-cli search "seek" --component "Audio/Video: Playback"
-
-# Multiple components
 bugzilla-cli search "decode" --component "Audio/Video: Playback" --component "Audio/Video: Web Codecs"
-
-# Also search comments (slower, more results)
 bugzilla-cli search "NS_ERROR_FAILURE" --full-text
-
-# Include already-fixed bugs
 bugzilla-cli search "mp4 crash" --all-statuses --limit 50
 ```
 

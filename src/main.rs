@@ -80,76 +80,113 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run the interactive setup wizard (API key, triage directory, secrets file).
     Setup,
 
+    /// Show a bug's metadata and optionally its full comment thread.
     Get {
+        /// Bug ID to fetch.
         id: u64,
+        /// Omit comments (only show bug metadata).
         #[arg(long = "no-comments", action = clap::ArgAction::SetFalse)]
         comments: bool,
     },
 
+    /// Fetch triage-queue bugs filed in a date range (defaults to the current ISO week).
     Fetch {
+        /// Start date (inclusive). Defaults to Monday of the current week.
         #[arg(long, value_name = "YYYY-MM-DD")]
         start: Option<String>,
+        /// End date (exclusive). Defaults to the following Monday.
         #[arg(long, value_name = "YYYY-MM-DD")]
         end: Option<String>,
     },
 
+    /// Post a comment on a bug.
     PostComment {
+        /// Bug ID to comment on.
         id: u64,
+        /// Comment text.
         text: String,
     },
 
+    /// Set one or more needinfo flags on a bug in a single PUT.
     SetNi {
+        /// Bug ID.
         id: u64,
+        /// One or more email addresses to needinfo.
         #[arg(required = true)]
         email: Vec<String>,
     },
 
+    /// Update structured fields on a bug (priority, severity, resolution, blocks, keywords).
     SetFields {
+        /// Bug ID.
         id: u64,
+        /// Set priority (P1–P5 or -- to clear).
         #[arg(long, value_parser = ["P1", "P2", "P3", "P4", "P5", "--"])]
         priority: Option<String>,
+        /// Set severity (S1–S4 or -- to clear).
         #[arg(long, value_parser = ["S1", "S2", "S3", "S4", "--"])]
         severity: Option<String>,
+        /// Set resolution (e.g. FIXED, DUPLICATE, WONTFIX).
         #[arg(long)]
         resolution: Option<String>,
+        /// Add one or more bug IDs to the blocks list.
         #[arg(long, num_args = 1..)]
         blocks_add: Vec<u64>,
+        /// Add one or more keywords.
         #[arg(long, num_args = 1..)]
         keywords_add: Vec<String>,
     },
 
+    /// Apply a pending draft from ~/firefox-triage/pending/bug-{id}.json (comment, NI, field updates).
     Apply {
+        /// Bug ID whose draft to apply.
         id: u64,
     },
 
+    /// Start watching a bug for needinfo replies.
     WatchAdd {
+        /// Bug ID to watch.
         id: u64,
+        /// Short title for display in poll output.
         #[arg(long, required = true)]
         title: String,
+        /// Email address(es) that were needinfo'd.
         #[arg(long = "ni", required = true, num_args = 1..)]
         ni: Vec<String>,
     },
 
+    /// Stop watching a bug (remove from the NI watch list).
     WatchRemove {
+        /// Bug ID to stop watching.
         id: u64,
     },
 
+    /// Poll all watched bugs and report which NI targets have replied or gone stale (≥7 days).
     WatchPoll,
 
+    /// Print the BMO login (email) associated with the stored API key.
     Whoami,
 
+    /// Search open bugs by summary substring. Use --full-text to also search comments.
     Search {
+        /// Substring to search for in bug summaries.
         query: String,
+        /// Filter by component (repeatable).
         #[arg(long, num_args = 1..)]
         component: Vec<String>,
+        /// Filter by product (default: all products).
         #[arg(long)]
         product: Option<String>,
+        /// Maximum number of results to return.
         #[arg(long, default_value = "25")]
         limit: u32,
+        /// Also search comments and descriptions (slower, more results).
         #[arg(long)]
         full_text: bool,
+        /// Include resolved/closed bugs (default: open bugs only).
         #[arg(long)]
         all_statuses: bool,
     },
