@@ -142,11 +142,19 @@ enum Commands {
 fn cmd_setup() -> anyhow::Result<()> {
     println!("=== bugzilla-cli setup ===");
 
-    let url_input = prompt(&format!("BMO base URL [{}]: ", BMO_BASE))?;
+    let url_input = prompt(&format!(
+        "BMO URL (press Enter for default: {}): ",
+        BMO_BASE
+    ))?;
     let url = if url_input.is_empty() {
         BMO_BASE.to_string()
     } else {
-        url_input
+        let trimmed = url_input.trim_end_matches('/');
+        if trimmed.ends_with("/rest") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/rest")
+        }
     };
 
     let api_key = prompt("API key: ")?;
