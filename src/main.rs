@@ -249,6 +249,15 @@ fn cmd_get(id: u64, comments: bool) -> anyhow::Result<()> {
         bug["severity"].as_str().unwrap_or("?")
     );
     println!("  Assigned: {}", bug["assigned_to"].as_str().unwrap_or("?"));
+    println!(
+        "  Creator:  {} ({})",
+        bug["creator"].as_str().unwrap_or("?"),
+        bug["creator_detail"]["real_name"].as_str().unwrap_or("?")
+    );
+    let qa_wb = bug["cf_qa_whiteboard"].as_str().unwrap_or("");
+    if !qa_wb.is_empty() {
+        println!("  QA:       {qa_wb}");
+    }
     if comments {
         let empty = vec![];
         let clist = data["comments"].as_array().unwrap_or(&empty);
