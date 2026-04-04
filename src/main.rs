@@ -129,7 +129,10 @@ enum Commands {
         /// Set severity (S1–S4 or -- to clear).
         #[arg(long, value_parser = ["S1", "S2", "S3", "S4", "--"])]
         severity: Option<String>,
-        /// Set resolution (e.g. FIXED, DUPLICATE, WONTFIX).
+        /// Set bug status (e.g. RESOLVED, NEW, ASSIGNED).
+        #[arg(long, value_parser = ["UNCONFIRMED", "NEW", "ASSIGNED", "REOPENED", "RESOLVED", "VERIFIED"])]
+        status: Option<String>,
+        /// Set resolution code (FIXED, DUPLICATE, WONTFIX, etc.). BMO requires both --status RESOLVED and --resolution to close a bug.
         #[arg(long)]
         resolution: Option<String>,
         /// Add one or more bug IDs to the blocks list.
@@ -430,6 +433,7 @@ fn cmd_set_ni(id: u64, emails: &[String]) -> anyhow::Result<()> {
 fn build_set_fields_body(
     priority: Option<&str>,
     severity: Option<&str>,
+    status: Option<&str>,
     resolution: Option<&str>,
     blocks_add: &[u64],
     keywords_add: &[String],
@@ -441,6 +445,9 @@ fn build_set_fields_body(
     }
     if let Some(s) = severity {
         body.insert("severity".into(), json!(s));
+    }
+    if let Some(st) = status {
+        body.insert("status".into(), json!(st));
     }
     if let Some(r) = resolution {
         body.insert("resolution".into(), json!(r));
@@ -457,24 +464,8 @@ fn build_set_fields_body(
     body
 }
 
-fn cmd_set_fields(
-    id: u64,
-    priority: Option<&str>,
-    severity: Option<&str>,
-    resolution: Option<&str>,
-    blocks_add: &[u64],
-    keywords_add: &[String],
-    cc_add: &[String],
-) -> anyhow::Result<()> {
+fn cmd_set_fields(id: u64, body: serde_json::Map<String, serde_json::Value>) -> anyhow::Result<()> {
     let client = get_client()?;
-    let body = build_set_fields_body(
-        priority,
-        severity,
-        resolution,
-        blocks_add,
-        keywords_add,
-        cc_add,
-    );
     if body.is_empty() {
         println!("Nothing to update.");
         return Ok(());
@@ -489,7 +480,7 @@ fn cmd_set_fields(
 
 fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     let mut body = serde_json::Map::new();
-    for field in ["priority", "severity", "resolution"] {
+    for field in ["priority", "severity", "status", "resolution"] {
         if let Some(v) = draft[field]
             .as_str()
             .filter(|s| !s.is_empty() && *s != "null")
@@ -684,6 +675,7 @@ mod tests {
         let draft = json!({
             "priority": "P2",
             "severity": "S2",
+            "status": "RESOLVED",
             "resolution": "FIXED",
             "blocks_add": [123u64],
             "keywords_add": ["regression"],
@@ -692,10 +684,19 @@ mod tests {
         let body = build_apply_field_body(&draft);
         assert_eq!(body["priority"], json!("P2"));
         assert_eq!(body["severity"], json!("S2"));
+        assert_eq!(body["status"], json!("RESOLVED"));
         assert_eq!(body["resolution"], json!("FIXED"));
         assert_eq!(body["blocks"], json!({"add": [123u64]}));
         assert_eq!(body["keywords"], json!({"add": ["regression"]}));
         assert_eq!(body["cc"], json!({"add": ["dev@mozilla.com"]}));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_status_omitted_when_absent() {
+        let draft = json!({"resolution": "FIXED"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("status"));
+        assert_eq!(body["resolution"], json!("FIXED"));
     }
 
     #[test]
@@ -729,6 +730,7 @@ mod tests {
             Some("P2"),
             Some("S3"),
             None,
+            None,
             &[10, 20],
             &["crash".to_string()],
             &["dev@mozilla.com".to_string()],
@@ -739,11 +741,13 @@ mod tests {
         assert_eq!(body["keywords"], json!({"add": ["crash"]}));
         assert_eq!(body["cc"], json!({"add": ["dev@mozilla.com"]}));
         assert!(!body.contains_key("resolution"));
+        assert!(!body.contains_key("status"));
     }
 
     #[test]
     fn test_build_set_fields_body_cc_only() {
         let body = build_set_fields_body(
+            None,
             None,
             None,
             None,
@@ -757,15 +761,38 @@ mod tests {
 
     #[test]
     fn test_build_set_fields_body_empty_cc_omitted() {
-        let body = build_set_fields_body(Some("P1"), None, None, &[], &[], &[]);
+        let body = build_set_fields_body(Some("P1"), None, None, None, &[], &[], &[]);
         assert!(!body.contains_key("cc"));
         assert_eq!(body["priority"], json!("P1"));
     }
 
     #[test]
     fn test_build_set_fields_body_all_empty_returns_empty_map() {
-        let body = build_set_fields_body(None, None, None, &[], &[], &[]);
+        let body = build_set_fields_body(None, None, None, None, &[], &[], &[]);
         assert!(body.is_empty());
+    }
+
+    #[test]
+    fn test_build_set_fields_body_close_bug() {
+        let body =
+            build_set_fields_body(None, None, Some("RESOLVED"), Some("FIXED"), &[], &[], &[]);
+        assert_eq!(body["status"], json!("RESOLVED"));
+        assert_eq!(body["resolution"], json!("FIXED"));
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn test_build_set_fields_body_status_only() {
+        let body = build_set_fields_body(None, None, Some("ASSIGNED"), None, &[], &[], &[]);
+        assert_eq!(body["status"], json!("ASSIGNED"));
+        assert!(!body.contains_key("resolution"));
+    }
+
+    #[test]
+    fn test_build_set_fields_body_no_status_omitted() {
+        let body = build_set_fields_body(Some("P1"), None, None, Some("FIXED"), &[], &[], &[]);
+        assert!(!body.contains_key("status"));
+        assert_eq!(body["resolution"], json!("FIXED"));
     }
 
     #[test]
@@ -951,20 +978,22 @@ fn main() -> anyhow::Result<()> {
             id,
             priority,
             severity,
+            status,
             resolution,
             blocks_add,
             keywords_add,
             cc_add,
         } => {
-            cmd_set_fields(
-                id,
+            let body = build_set_fields_body(
                 priority.as_deref(),
                 severity.as_deref(),
+                status.as_deref(),
                 resolution.as_deref(),
                 &blocks_add,
                 &keywords_add,
                 &cc_add,
-            )?;
+            );
+            cmd_set_fields(id, body)?;
         }
         Commands::Apply { id } => cmd_apply(id)?,
         Commands::WatchAdd { id, title, ni } => cmd_watch_add(id, &title, &ni)?,
