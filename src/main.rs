@@ -135,6 +135,9 @@ enum Commands {
         /// Set resolution code (FIXED, DUPLICATE, WONTFIX, etc.). BMO requires both --status RESOLVED and --resolution to close a bug.
         #[arg(long)]
         resolution: Option<String>,
+        /// Bug ID this is a duplicate of. Required by BMO when --resolution DUPLICATE.
+        #[arg(long)]
+        dupe_of: Option<u64>,
         /// Add one or more bug IDs to the blocks list.
         #[arg(long, num_args = 1..)]
         blocks_add: Vec<u64>,
@@ -430,11 +433,13 @@ fn cmd_set_ni(id: u64, emails: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors clap's flat arg list 1:1; no meaningful grouping exists
 fn build_set_fields_body(
     priority: Option<&str>,
     severity: Option<&str>,
     status: Option<&str>,
     resolution: Option<&str>,
+    dupe_of: Option<u64>,
     blocks_add: &[u64],
     keywords_add: &[String],
     cc_add: &[String],
@@ -451,6 +456,9 @@ fn build_set_fields_body(
     }
     if let Some(r) = resolution {
         body.insert("resolution".into(), json!(r));
+    }
+    if let Some(d) = dupe_of {
+        body.insert("dupe_of".into(), json!(d));
     }
     if !blocks_add.is_empty() {
         body.insert("blocks".into(), json!({"add": blocks_add}));
@@ -487,6 +495,9 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
         {
             body.insert(field.into(), json!(v));
         }
+    }
+    if let Some(d) = draft["dupe_of"].as_u64() {
+        body.insert("dupe_of".into(), json!(d));
     }
     if let Some(arr) = draft["blocks_add"].as_array().filter(|a| !a.is_empty()) {
         body.insert("blocks".into(), json!({"add": arr}));
@@ -731,6 +742,7 @@ mod tests {
             Some("S3"),
             None,
             None,
+            None,
             &[10, 20],
             &["crash".to_string()],
             &["dev@mozilla.com".to_string()],
@@ -751,6 +763,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &[],
             &[],
             &["a@b.com".to_string(), "c@d.com".to_string()],
@@ -761,21 +774,29 @@ mod tests {
 
     #[test]
     fn test_build_set_fields_body_empty_cc_omitted() {
-        let body = build_set_fields_body(Some("P1"), None, None, None, &[], &[], &[]);
+        let body = build_set_fields_body(Some("P1"), None, None, None, None, &[], &[], &[]);
         assert!(!body.contains_key("cc"));
         assert_eq!(body["priority"], json!("P1"));
     }
 
     #[test]
     fn test_build_set_fields_body_all_empty_returns_empty_map() {
-        let body = build_set_fields_body(None, None, None, None, &[], &[], &[]);
+        let body = build_set_fields_body(None, None, None, None, None, &[], &[], &[]);
         assert!(body.is_empty());
     }
 
     #[test]
     fn test_build_set_fields_body_close_bug() {
-        let body =
-            build_set_fields_body(None, None, Some("RESOLVED"), Some("FIXED"), &[], &[], &[]);
+        let body = build_set_fields_body(
+            None,
+            None,
+            Some("RESOLVED"),
+            Some("FIXED"),
+            None,
+            &[],
+            &[],
+            &[],
+        );
         assert_eq!(body["status"], json!("RESOLVED"));
         assert_eq!(body["resolution"], json!("FIXED"));
         assert_eq!(body.len(), 2);
@@ -783,16 +804,50 @@ mod tests {
 
     #[test]
     fn test_build_set_fields_body_status_only() {
-        let body = build_set_fields_body(None, None, Some("ASSIGNED"), None, &[], &[], &[]);
+        let body = build_set_fields_body(None, None, Some("ASSIGNED"), None, None, &[], &[], &[]);
         assert_eq!(body["status"], json!("ASSIGNED"));
         assert!(!body.contains_key("resolution"));
     }
 
     #[test]
     fn test_build_set_fields_body_no_status_omitted() {
-        let body = build_set_fields_body(Some("P1"), None, None, Some("FIXED"), &[], &[], &[]);
+        let body =
+            build_set_fields_body(Some("P1"), None, None, Some("FIXED"), None, &[], &[], &[]);
         assert!(!body.contains_key("status"));
         assert_eq!(body["resolution"], json!("FIXED"));
+    }
+
+    #[test]
+    fn test_build_set_fields_body_dupe_of() {
+        let body = build_set_fields_body(
+            None,
+            None,
+            Some("RESOLVED"),
+            Some("DUPLICATE"),
+            Some(999),
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(body["status"], json!("RESOLVED"));
+        assert_eq!(body["resolution"], json!("DUPLICATE"));
+        assert_eq!(body["dupe_of"], json!(999u64));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_dupe_of() {
+        let draft = json!({"status": "RESOLVED", "resolution": "DUPLICATE", "dupe_of": 42u64});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["status"], json!("RESOLVED"));
+        assert_eq!(body["resolution"], json!("DUPLICATE"));
+        assert_eq!(body["dupe_of"], json!(42u64));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_dupe_of_absent_omitted() {
+        let draft = json!({"resolution": "FIXED"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("dupe_of"));
     }
 
     #[test]
@@ -980,6 +1035,7 @@ fn main() -> anyhow::Result<()> {
             severity,
             status,
             resolution,
+            dupe_of,
             blocks_add,
             keywords_add,
             cc_add,
@@ -989,6 +1045,7 @@ fn main() -> anyhow::Result<()> {
                 severity.as_deref(),
                 status.as_deref(),
                 resolution.as_deref(),
+                dupe_of,
                 &blocks_add,
                 &keywords_add,
                 &cc_add,

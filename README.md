@@ -62,9 +62,10 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 | `bugzilla-cli set-fields <id> [options]` | Update priority, severity, resolution, blocks, keywords |
 | `bugzilla-cli apply <id>` | Apply a pending draft from `~/firefox-triage/pending/bug-{id}.json` |
 
-`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--status <STATUS>`, `--resolution <RES>`, `--blocks-add <id>...`, `--keywords-add <kw>...`, `--cc-add <email>...`
+`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--status <STATUS>`, `--resolution <RES>`, `--dupe-of <id>`, `--blocks-add <id>...`, `--keywords-add <kw>...`, `--cc-add <email>...`
 
 To close a bug: `bugzilla-cli set-fields <id> --status RESOLVED --resolution FIXED`
+To mark duplicate: `bugzilla-cli set-fields <id> --status RESOLVED --resolution DUPLICATE --dupe-of <bug-id>`
 
 ### NI watch list
 
