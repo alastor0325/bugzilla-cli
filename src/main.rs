@@ -147,6 +147,12 @@ enum Commands {
         /// Add one or more email addresses to the CC list.
         #[arg(long, num_args = 1..)]
         cc_add: Vec<String>,
+        /// Move bug to a different product (e.g. "Core").
+        #[arg(long)]
+        product: Option<String>,
+        /// Move bug to a different component (e.g. "Graphics: WebRender"). Requires --product if the component exists in multiple products.
+        #[arg(long)]
+        component: Option<String>,
     },
 
     /// Apply a pending draft from ~/firefox-triage/pending/bug-{id}.json (comment, NI, field updates).
@@ -414,9 +420,13 @@ fn cmd_fetch(start: Option<String>, end: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn build_comment_body(text: &str) -> serde_json::Value {
+    json!({"comment": text, "is_markdown": true})
+}
+
 fn cmd_post_comment(id: u64, text: &str) -> anyhow::Result<()> {
     let client = get_client()?;
-    let body = json!({"comment": text});
+    let body = build_comment_body(text);
     let result = client.post(&format!("/bug/{id}/comment"), &body)?;
     println!("Comment {} posted to bug {}.", result["id"], id);
     Ok(())
@@ -443,6 +453,8 @@ fn build_set_fields_body(
     blocks_add: &[u64],
     keywords_add: &[String],
     cc_add: &[String],
+    product: Option<&str>,
+    component: Option<&str>,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut body = serde_json::Map::new();
     if let Some(p) = priority {
@@ -468,6 +480,12 @@ fn build_set_fields_body(
     }
     if !cc_add.is_empty() {
         body.insert("cc".into(), json!({"add": cc_add}));
+    }
+    if let Some(p) = product {
+        body.insert("product".into(), json!(p));
+    }
+    if let Some(c) = component {
+        body.insert("component".into(), json!(c));
     }
     body
 }
@@ -551,7 +569,7 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     if let Some(comment) = draft["comment"].as_str().filter(|s| !s.is_empty()) {
         client.post(
             &format!("/bug/{bug_id}/comment"),
-            &json!({"comment": comment}),
+            &build_comment_body(comment),
         )?;
     }
 
@@ -746,6 +764,8 @@ mod tests {
             &[10, 20],
             &["crash".to_string()],
             &["dev@mozilla.com".to_string()],
+            None,
+            None,
         );
         assert_eq!(body["priority"], json!("P2"));
         assert_eq!(body["severity"], json!("S3"));
@@ -767,6 +787,8 @@ mod tests {
             &[],
             &[],
             &["a@b.com".to_string(), "c@d.com".to_string()],
+            None,
+            None,
         );
         assert_eq!(body["cc"], json!({"add": ["a@b.com", "c@d.com"]}));
         assert_eq!(body.len(), 1);
@@ -774,14 +796,25 @@ mod tests {
 
     #[test]
     fn test_build_set_fields_body_empty_cc_omitted() {
-        let body = build_set_fields_body(Some("P1"), None, None, None, None, &[], &[], &[]);
+        let body = build_set_fields_body(
+            Some("P1"),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+        );
         assert!(!body.contains_key("cc"));
         assert_eq!(body["priority"], json!("P1"));
     }
 
     #[test]
     fn test_build_set_fields_body_all_empty_returns_empty_map() {
-        let body = build_set_fields_body(None, None, None, None, None, &[], &[], &[]);
+        let body = build_set_fields_body(None, None, None, None, None, &[], &[], &[], None, None);
         assert!(body.is_empty());
     }
 
@@ -796,6 +829,8 @@ mod tests {
             &[],
             &[],
             &[],
+            None,
+            None,
         );
         assert_eq!(body["status"], json!("RESOLVED"));
         assert_eq!(body["resolution"], json!("FIXED"));
@@ -804,15 +839,36 @@ mod tests {
 
     #[test]
     fn test_build_set_fields_body_status_only() {
-        let body = build_set_fields_body(None, None, Some("ASSIGNED"), None, None, &[], &[], &[]);
+        let body = build_set_fields_body(
+            None,
+            None,
+            Some("ASSIGNED"),
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+        );
         assert_eq!(body["status"], json!("ASSIGNED"));
         assert!(!body.contains_key("resolution"));
     }
 
     #[test]
     fn test_build_set_fields_body_no_status_omitted() {
-        let body =
-            build_set_fields_body(Some("P1"), None, None, Some("FIXED"), None, &[], &[], &[]);
+        let body = build_set_fields_body(
+            Some("P1"),
+            None,
+            None,
+            Some("FIXED"),
+            None,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+        );
         assert!(!body.contains_key("status"));
         assert_eq!(body["resolution"], json!("FIXED"));
     }
@@ -828,6 +884,8 @@ mod tests {
             &[],
             &[],
             &[],
+            None,
+            None,
         );
         assert_eq!(body["status"], json!("RESOLVED"));
         assert_eq!(body["resolution"], json!("DUPLICATE"));
@@ -990,6 +1048,20 @@ mod tests {
         let params = build_search_params("crash", &[], None, 25, false, false);
         assert!(param(&params, "product").is_none());
     }
+
+    #[test]
+    fn test_build_comment_body_sets_is_markdown() {
+        let body = build_comment_body("**bold** text");
+        assert_eq!(body["comment"], json!("**bold** text"));
+        assert_eq!(body["is_markdown"], json!(true));
+    }
+
+    #[test]
+    fn test_build_comment_body_empty_text() {
+        let body = build_comment_body("");
+        assert_eq!(body["comment"], json!(""));
+        assert_eq!(body["is_markdown"], json!(true));
+    }
 }
 
 fn cmd_watch_add(id: u64, title: &str, ni: &[String]) -> anyhow::Result<()> {
@@ -1039,6 +1111,8 @@ fn main() -> anyhow::Result<()> {
             blocks_add,
             keywords_add,
             cc_add,
+            product,
+            component,
         } => {
             let body = build_set_fields_body(
                 priority.as_deref(),
@@ -1049,6 +1123,8 @@ fn main() -> anyhow::Result<()> {
                 &blocks_add,
                 &keywords_add,
                 &cc_add,
+                product.as_deref(),
+                component.as_deref(),
             );
             cmd_set_fields(id, body)?;
         }
