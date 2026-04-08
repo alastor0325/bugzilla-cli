@@ -424,6 +424,10 @@ fn build_comment_body(text: &str) -> serde_json::Value {
     json!({"comment": text, "is_markdown": true})
 }
 
+fn build_needinfo_flag(requestee: &str) -> serde_json::Value {
+    json!({"name": "needinfo", "status": "?", "requestee": requestee})
+}
+
 fn cmd_post_comment(id: u64, text: &str) -> anyhow::Result<()> {
     let client = get_client()?;
     let body = build_comment_body(text);
@@ -436,7 +440,7 @@ fn cmd_set_ni(id: u64, emails: &[String]) -> anyhow::Result<()> {
     let client = get_client()?;
     let flags: Vec<serde_json::Value> = emails
         .iter()
-        .map(|email| json!({"name": "needinfo", "status": "?", "requestee": email}))
+        .map(|email| build_needinfo_flag(email.as_str()))
         .collect();
     client.put(&format!("/bug/{id}"), &json!({"flags": flags}))?;
     println!("NI set on bug {id} for: {}", emails.join(", "));
@@ -529,6 +533,35 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
     body
 }
 
+/// Build the combined PUT /rest/bug/{id} body for apply.
+/// Merges field changes, NI flags, and (when field/flag changes are present) the comment
+/// into a single request body. Returns an empty map when there is nothing to PUT —
+/// the caller should fall back to POST /comment for comment-only drafts.
+fn build_apply_put_body(draft: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let mut body = build_apply_field_body(draft);
+
+    if let Some(ni_targets) = draft["ni_targets"].as_array().filter(|a| !a.is_empty()) {
+        let flags: Vec<serde_json::Value> = ni_targets
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(build_needinfo_flag)
+            .collect();
+        body.insert("flags".into(), json!(flags));
+    }
+
+    // Fold the comment in when there are other changes so everything lands atomically.
+    if !body.is_empty()
+        && let Some(comment) = draft["comment"].as_str().filter(|s| !s.is_empty())
+    {
+        body.insert(
+            "comment".into(),
+            json!({"body": comment, "is_markdown": true}),
+        );
+    }
+
+    body
+}
+
 fn cmd_apply(id: u64) -> anyhow::Result<()> {
     let client = get_client()?;
     let pending_file = triage_dir().join("pending").join(format!("bug-{id}.json"));
@@ -566,21 +599,7 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
 
     let bug_id = draft["bug_id"].as_u64().unwrap_or(id);
 
-    if let Some(comment) = draft["comment"].as_str().filter(|s| !s.is_empty()) {
-        client.post(
-            &format!("/bug/{bug_id}/comment"),
-            &build_comment_body(comment),
-        )?;
-    }
-
-    let field_body = build_apply_field_body(&draft);
-    if !field_body.is_empty() {
-        client.put(
-            &format!("/bug/{bug_id}"),
-            &serde_json::Value::Object(field_body),
-        )?;
-    }
-
+    // Update watchlist for NI targets before the API call.
     if let Some(ni_targets) = draft["ni_targets"].as_array().filter(|a| !a.is_empty()) {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let title = draft["title"].as_str().unwrap_or("?");
@@ -589,11 +608,20 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
         WatchList::load(&watch_file_path())?.add(&bug_id.to_string(), title, &targets, &now)?;
-        let flags: Vec<serde_json::Value> = targets
-            .iter()
-            .map(|e| json!({"name": "needinfo", "status": "?", "requestee": e}))
-            .collect();
-        client.put(&format!("/bug/{bug_id}"), &json!({"flags": flags}))?;
+    }
+
+    let put_body = build_apply_put_body(&draft);
+    if !put_body.is_empty() {
+        client.put(
+            &format!("/bug/{bug_id}"),
+            &serde_json::Value::Object(put_body),
+        )?;
+    } else if let Some(comment) = draft["comment"].as_str().filter(|s| !s.is_empty()) {
+        // Comment-only draft: no fields or flags to PUT alongside, so use the comment endpoint.
+        client.post(
+            &format!("/bug/{bug_id}/comment"),
+            &build_comment_body(comment),
+        )?;
     }
 
     std::fs::remove_file(&pending_file)?;
@@ -906,6 +934,81 @@ mod tests {
         let draft = json!({"resolution": "FIXED"});
         let body = build_apply_field_body(&draft);
         assert!(!body.contains_key("dupe_of"));
+    }
+
+    #[test]
+    fn test_build_apply_put_body_comment_folded_into_fields() {
+        let draft = json!({
+            "priority": "P2",
+            "comment": "looks good"
+        });
+        let body = build_apply_put_body(&draft);
+        assert_eq!(body["priority"], json!("P2"));
+        assert_eq!(
+            body["comment"],
+            json!({"body": "looks good", "is_markdown": true})
+        );
+        assert!(!body.contains_key("flags"));
+    }
+
+    #[test]
+    fn test_build_apply_put_body_comment_folded_into_flags() {
+        let draft = json!({
+            "ni_targets": ["dev@mozilla.com"],
+            "comment": "need info"
+        });
+        let body = build_apply_put_body(&draft);
+        assert_eq!(
+            body["flags"],
+            json!([{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com"}])
+        );
+        assert_eq!(
+            body["comment"],
+            json!({"body": "need info", "is_markdown": true})
+        );
+    }
+
+    #[test]
+    fn test_build_apply_put_body_all_combined() {
+        let draft = json!({
+            "priority": "P1",
+            "ni_targets": ["a@b.com"],
+            "comment": "pinging"
+        });
+        let body = build_apply_put_body(&draft);
+        assert_eq!(body["priority"], json!("P1"));
+        assert_eq!(
+            body["flags"],
+            json!([{"name": "needinfo", "status": "?", "requestee": "a@b.com"}])
+        );
+        assert_eq!(
+            body["comment"],
+            json!({"body": "pinging", "is_markdown": true})
+        );
+    }
+
+    #[test]
+    fn test_build_apply_put_body_comment_only_returns_empty() {
+        // No fields, no flags — comment-only draft; caller must POST separately.
+        let draft = json!({"comment": "just a note"});
+        let body = build_apply_put_body(&draft);
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn test_build_apply_put_body_fields_only_no_comment_key() {
+        let draft = json!({"severity": "S3"});
+        let body = build_apply_put_body(&draft);
+        assert_eq!(body["severity"], json!("S3"));
+        assert!(!body.contains_key("comment"));
+        assert!(!body.contains_key("flags"));
+    }
+
+    #[test]
+    fn test_build_apply_put_body_empty_comment_not_folded() {
+        let draft = json!({"priority": "P2", "comment": ""});
+        let body = build_apply_put_body(&draft);
+        assert!(!body.contains_key("comment"));
     }
 
     #[test]
