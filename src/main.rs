@@ -509,28 +509,33 @@ fn cmd_set_fields(id: u64, body: serde_json::Map<String, serde_json::Value>) -> 
 }
 
 fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
-    let mut body = serde_json::Map::new();
-    for field in ["priority", "severity", "status", "resolution"] {
-        if let Some(v) = draft[field]
-            .as_str()
-            .filter(|s| !s.is_empty() && *s != "null")
-        {
-            body.insert(field.into(), json!(v));
-        }
-    }
-    if let Some(d) = draft["dupe_of"].as_u64() {
-        body.insert("dupe_of".into(), json!(d));
-    }
-    if let Some(arr) = draft["blocks_add"].as_array().filter(|a| !a.is_empty()) {
-        body.insert("blocks".into(), json!({"add": arr}));
-    }
-    if let Some(arr) = draft["keywords_add"].as_array().filter(|a| !a.is_empty()) {
-        body.insert("keywords".into(), json!({"add": arr}));
-    }
-    if let Some(arr) = draft["cc_add"].as_array().filter(|a| !a.is_empty()) {
-        body.insert("cc".into(), json!({"add": arr}));
-    }
-    body
+    let str_field = |k: &str| draft[k].as_str().filter(|s| !s.is_empty() && *s != "null");
+    let to_strings = |k: &str| -> Vec<String> {
+        draft[k]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let blocks_add: Vec<u64> = draft["blocks_add"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .unwrap_or_default();
+    build_set_fields_body(
+        str_field("priority"),
+        str_field("severity"),
+        str_field("status"),
+        str_field("resolution"),
+        draft["dupe_of"].as_u64(),
+        &blocks_add,
+        &to_strings("keywords_add"),
+        &to_strings("cc_add"),
+        str_field("product"),
+        str_field("component"),
+    )
 }
 
 /// Build the combined PUT /rest/bug/{id} body for apply.
@@ -583,12 +588,14 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     println!("Comment:\n{}", draft["comment"].as_str().unwrap_or(""));
     println!("NI targets: {}", draft["ni_targets"]);
     println!(
-        "Fields: priority={}, severity={}, blocks_add={}, keywords_add={}, cc_add={}",
+        "Fields: priority={}, severity={}, blocks_add={}, keywords_add={}, cc_add={}, product={}, component={}",
         draft["priority"],
         draft["severity"],
         draft["blocks_add"],
         draft["keywords_add"],
-        draft["cc_add"]
+        draft["cc_add"],
+        draft["product"],
+        draft["component"],
     );
 
     let confirm = prompt("\nApply? [y/N] ")?;
@@ -734,6 +741,8 @@ mod tests {
             "severity": "S2",
             "status": "RESOLVED",
             "resolution": "FIXED",
+            "product": "Core",
+            "component": "Audio/Video: Playback",
             "blocks_add": [123u64],
             "keywords_add": ["regression"],
             "cc_add": ["dev@mozilla.com"]
@@ -743,6 +752,8 @@ mod tests {
         assert_eq!(body["severity"], json!("S2"));
         assert_eq!(body["status"], json!("RESOLVED"));
         assert_eq!(body["resolution"], json!("FIXED"));
+        assert_eq!(body["product"], json!("Core"));
+        assert_eq!(body["component"], json!("Audio/Video: Playback"));
         assert_eq!(body["blocks"], json!({"add": [123u64]}));
         assert_eq!(body["keywords"], json!({"add": ["regression"]}));
         assert_eq!(body["cc"], json!({"add": ["dev@mozilla.com"]}));
@@ -779,6 +790,22 @@ mod tests {
         assert!(!body.contains_key("priority"));
         assert!(!body.contains_key("severity"));
         assert_eq!(body["resolution"], json!("FIXED"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_product_and_component() {
+        let draft = json!({"product": "Core", "component": "Audio/Video: Playback"});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["product"], json!("Core"));
+        assert_eq!(body["component"], json!("Audio/Video: Playback"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_product_absent_omitted() {
+        let draft = json!({"priority": "P1"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("product"));
+        assert!(!body.contains_key("component"));
     }
 
     #[test]
