@@ -39,7 +39,7 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 | `bugzilla-cli whoami` | Print the BMO login (email) tied to the stored API key |
 | `bugzilla-cli setup` | Interactive wizard: API key, triage directory, secrets file |
 | `bugzilla-cli version` | Print version and git commit hash |
-| `bugzilla-cli update` | Pull latest source and rebuild (dev symlink installs only) |
+| `bugzilla-cli update` | Update to the latest version — `git pull + cargo build` for dev symlink installs, `cargo install --git <repo>` for `cargo install` installs |
 | `bugzilla-cli --version` | Print version (short form) |
 
 ### Reading bugs

@@ -11,7 +11,7 @@ Development proceeds through six sequential steps: understand the task, extract 
 - All new or changed logic must be extracted into **pure functions** (no `get_client()`, no I/O) so they are directly testable.
 - Every pure function must have **unit tests** covering its branches. If behavior is removed, a test must assert the removal holds.
 - **`cargo test --lib --bins` must pass** before committing. Failing tests are a hard blocker — fix them, do not work around them.
-- **README.md must be updated** whenever a command is added/removed or a flag/default changes.
+- **README.md must be updated** whenever a command is added/removed, a flag/default changes, or existing behaviour changes in a user-visible way (e.g. a command now does something different, an API call changes, output format changes).
 
 ## Process Details
 
@@ -35,12 +35,13 @@ cargo test --lib --bins
 ### Step 4 — Agent Review
 Run `/simplify` to have a fresh-context agent review the changes for code quality, reuse, and efficiency. Apply any fixes before committing.
 
-### Step 5 — Commit & Push
+### Step 5 — Commit, Push & Build
 ```
 git commit -m "<type>: <what and why>"
 git push
+cargo build
 ```
-Both are required. Never commit without pushing.
+All three are required. Never commit without pushing. Always run `cargo build` after pushing so the binary in `$PATH` (symlinked to `target/debug/`) reflects the latest changes immediately.
 
 ### Step 6 — Conclude
 Summarize: what changed, what tests were added, whether README was updated.
