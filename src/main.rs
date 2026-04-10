@@ -72,7 +72,7 @@ fn prompt(label: &str) -> anyhow::Result<String> {
 }
 
 #[derive(Parser)]
-#[command(name = "bugzilla-cli", about = "Thin BMO REST client.")]
+#[command(name = "bugzilla-cli", about = "Thin BMO REST client.", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -205,6 +205,47 @@ enum Commands {
         #[arg(long)]
         all_statuses: bool,
     },
+
+    /// Print version and git commit hash.
+    Version,
+
+    /// Pull the latest source and rebuild the binary (dev symlink installs only).
+    Update,
+}
+
+fn version_string() -> String {
+    format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"))
+}
+
+fn project_root_from_exe(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    exe.parent()?.parent()?.parent().map(|p| p.to_path_buf())
+}
+
+fn cmd_update() -> anyhow::Result<()> {
+    let exe = std::env::current_exe().context("cannot determine executable path")?;
+    let root = project_root_from_exe(&exe).context(
+        "update requires a dev symlink install (binary not inside a cargo target/ tree)",
+    )?;
+
+    println!("Updating from {}...", root.display());
+
+    let pull = std::process::Command::new("git")
+        .arg("pull")
+        .current_dir(&root)
+        .status()
+        .context("failed to run git pull")?;
+    anyhow::ensure!(pull.success(), "git pull failed");
+
+    println!("Rebuilding...");
+    let build = std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(&root)
+        .status()
+        .context("failed to run cargo build")?;
+    anyhow::ensure!(build.success(), "cargo build failed");
+
+    println!("Done.");
+    Ok(())
 }
 
 fn cmd_setup() -> anyhow::Result<()> {
@@ -1192,6 +1233,41 @@ mod tests {
         assert_eq!(body["comment"], json!(""));
         assert_eq!(body["is_markdown"], json!(true));
     }
+
+    #[test]
+    fn test_version_string_format() {
+        let v = version_string();
+        assert!(v.starts_with(env!("CARGO_PKG_VERSION")));
+        assert!(v.contains('('));
+        assert!(v.contains(')'));
+    }
+
+    #[test]
+    fn test_project_root_from_exe_debug() {
+        use std::path::Path;
+        let exe = Path::new("/home/user/projects/bugzilla-cli/target/debug/bugzilla-cli");
+        assert_eq!(
+            project_root_from_exe(exe).unwrap(),
+            Path::new("/home/user/projects/bugzilla-cli")
+        );
+    }
+
+    #[test]
+    fn test_project_root_from_exe_release() {
+        use std::path::Path;
+        let exe = Path::new("/home/user/projects/bugzilla-cli/target/release/bugzilla-cli");
+        assert_eq!(
+            project_root_from_exe(exe).unwrap(),
+            Path::new("/home/user/projects/bugzilla-cli")
+        );
+    }
+
+    #[test]
+    fn test_project_root_from_exe_too_shallow() {
+        use std::path::Path;
+        assert!(project_root_from_exe(Path::new("bugzilla-cli")).is_none());
+        assert!(project_root_from_exe(Path::new("debug/bugzilla-cli")).is_none());
+    }
 }
 
 fn cmd_watch_add(id: u64, title: &str, ni: &[String]) -> anyhow::Result<()> {
@@ -1219,13 +1295,16 @@ fn cmd_watch_poll() -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    if !is_configured() {
+    let cli = Cli::parse();
+    // Version and Update don't need API access; skip the config check for them.
+    if !matches!(cli.command, Commands::Version | Commands::Update) && !is_configured() {
         println!("bugzilla-cli is not configured yet. Starting setup...\n");
         cmd_setup()?;
         println!();
     }
-    let cli = Cli::parse();
     match cli.command {
+        Commands::Version => println!("bugzilla-cli {}", version_string()),
+        Commands::Update => cmd_update()?,
         Commands::Setup => cmd_setup()?,
         Commands::Get { id, comments } => cmd_get(id, comments)?,
         Commands::Fetch { start, end } => cmd_fetch(start, end)?,
