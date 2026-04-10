@@ -217,33 +217,61 @@ fn version_string() -> String {
     format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"))
 }
 
+const REPO_URL: &str = "https://github.com/alastor0325/bugzilla-cli";
+
 fn project_root_from_exe(exe: &std::path::Path) -> Option<std::path::PathBuf> {
     exe.parent()?.parent()?.parent().map(|p| p.to_path_buf())
 }
 
+enum UpdateMode {
+    /// Dev symlink install: pull + rebuild in place.
+    DevSymlink(std::path::PathBuf),
+    /// `cargo install --git` install: reinstall from the remote.
+    CargoInstall,
+}
+
+fn detect_update_mode(exe: &std::path::Path) -> UpdateMode {
+    match project_root_from_exe(exe).filter(|p| p.join("Cargo.toml").exists()) {
+        Some(root) => UpdateMode::DevSymlink(root),
+        None => UpdateMode::CargoInstall,
+    }
+}
+
+fn run(cmd: &mut std::process::Command, label: &str) -> anyhow::Result<()> {
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run {label}"))?;
+    anyhow::ensure!(status.success(), "{label} failed");
+    Ok(())
+}
+
 fn cmd_update() -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("cannot determine executable path")?;
-    let root = project_root_from_exe(&exe).context(
-        "update requires a dev symlink install (binary not inside a cargo target/ tree)",
-    )?;
-
-    println!("Updating from {}...", root.display());
-
-    let pull = std::process::Command::new("git")
-        .arg("pull")
-        .current_dir(&root)
-        .status()
-        .context("failed to run git pull")?;
-    anyhow::ensure!(pull.success(), "git pull failed");
-
-    println!("Rebuilding...");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .current_dir(&root)
-        .status()
-        .context("failed to run cargo build")?;
-    anyhow::ensure!(build.success(), "cargo build failed");
-
+    match detect_update_mode(&exe) {
+        UpdateMode::DevSymlink(root) => {
+            println!("Dev install — pulling in {}...", root.display());
+            run(
+                std::process::Command::new("git")
+                    .arg("pull")
+                    .current_dir(&root),
+                "git pull",
+            )?;
+            println!("Rebuilding...");
+            run(
+                std::process::Command::new("cargo")
+                    .arg("build")
+                    .current_dir(&root),
+                "cargo build",
+            )?;
+        }
+        UpdateMode::CargoInstall => {
+            println!("cargo install — reinstalling from {}...", REPO_URL);
+            run(
+                std::process::Command::new("cargo").args(["install", "--git", REPO_URL]),
+                "cargo install",
+            )?;
+        }
+    }
     println!("Done.");
     Ok(())
 }
@@ -1267,6 +1295,27 @@ mod tests {
         use std::path::Path;
         assert!(project_root_from_exe(Path::new("bugzilla-cli")).is_none());
         assert!(project_root_from_exe(Path::new("debug/bugzilla-cli")).is_none());
+    }
+
+    #[test]
+    fn test_detect_update_mode_dev_symlink() {
+        // Build a fake target/debug/ tree with a Cargo.toml at the root.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "").unwrap();
+        let exe = root.join("target/debug/bugzilla-cli");
+        assert!(matches!(
+            detect_update_mode(&exe),
+            UpdateMode::DevSymlink(_)
+        ));
+    }
+
+    #[test]
+    fn test_detect_update_mode_cargo_install() {
+        // exe path too shallow → no Cargo.toml above it → CargoInstall.
+        let exe = std::path::Path::new("/home/user/.cargo/bin/bugzilla-cli");
+        assert!(matches!(detect_update_mode(exe), UpdateMode::CargoInstall));
     }
 }
 
