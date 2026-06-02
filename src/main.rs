@@ -593,11 +593,21 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
         .unwrap_or_default();
+    // BMO rejects a `resolution` unless the bug is also moved to a closed
+    // status. Triage drafts carry `resolution` (and `dupe_of`) but no
+    // explicit `status`, so default it to RESOLVED whenever a resolution is
+    // present — otherwise the PUT 400s (e.g. closing as DUPLICATE).
+    let resolution = str_field("resolution");
+    let status = str_field("status").or(if resolution.is_some() {
+        Some("RESOLVED")
+    } else {
+        None
+    });
     build_set_fields_body(
         str_field("priority"),
         str_field("severity"),
-        str_field("status"),
-        str_field("resolution"),
+        status,
+        resolution,
         draft["dupe_of"].as_u64(),
         &blocks_add,
         &to_strings("keywords_add"),
@@ -829,11 +839,32 @@ mod tests {
     }
 
     #[test]
-    fn test_build_apply_field_body_status_omitted_when_absent() {
-        let draft = json!({"resolution": "FIXED"});
+    fn test_build_apply_field_body_defaults_status_resolved_with_resolution() {
+        // BMO requires a closed status alongside any resolution. Drafts omit
+        // `status`, so apply must default it to RESOLVED (else the PUT 400s).
+        let draft = json!({"resolution": "DUPLICATE", "dupe_of": 1711812u64});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["status"], json!("RESOLVED"));
+        assert_eq!(body["resolution"], json!("DUPLICATE"));
+        assert_eq!(body["dupe_of"], json!(1711812u64));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_explicit_status_preserved() {
+        // An explicit status in the draft is never overridden.
+        let draft = json!({"status": "VERIFIED", "resolution": "FIXED"});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["status"], json!("VERIFIED"));
+        assert_eq!(body["resolution"], json!("FIXED"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_no_status_without_resolution() {
+        // No resolution → no implicit status (e.g. a severity-only draft).
+        let draft = json!({"severity": "S3"});
         let body = build_apply_field_body(&draft);
         assert!(!body.contains_key("status"));
-        assert_eq!(body["resolution"], json!("FIXED"));
+        assert!(!body.contains_key("resolution"));
     }
 
     #[test]
