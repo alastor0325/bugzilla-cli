@@ -710,8 +710,14 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
         )?;
     }
 
-    std::fs::remove_file(&pending_file)?;
-    println!("Applied. Draft removed.");
+    // Archive the draft instead of deleting it, so the dashboard can still
+    // show the bug's report (bug_context / ai_reasoning) after it moves to
+    // the Awaiting-reply list. Same JSON shape, under applied/.
+    let applied_dir = triage_dir().join("applied");
+    std::fs::create_dir_all(&applied_dir)?;
+    let archived = applied_dir.join(format!("bug-{bug_id}.json"));
+    std::fs::rename(&pending_file, &archived)?;
+    println!("Applied. Draft archived to {}.", archived.display());
     Ok(())
 }
 
