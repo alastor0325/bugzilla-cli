@@ -141,6 +141,9 @@ enum Commands {
         /// Add one or more bug IDs to the blocks list.
         #[arg(long, num_args = 1..)]
         blocks_add: Vec<u64>,
+        /// Add one or more bug IDs to the regressed_by list (the change(s) that caused this regression).
+        #[arg(long, num_args = 1..)]
+        regressed_by_add: Vec<u64>,
         /// Add one or more keywords.
         #[arg(long, num_args = 1..)]
         keywords_add: Vec<String>,
@@ -593,6 +596,10 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
         .unwrap_or_default();
+    let regressed_by_add: Vec<u64> = draft["regressed_by_add"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .unwrap_or_default();
     // BMO rejects a `resolution` unless the bug is also moved to a closed
     // status. Triage drafts carry `resolution` (and `dupe_of`) but no
     // explicit `status`, so default it to RESOLVED whenever a resolution is
@@ -603,7 +610,7 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
     } else {
         None
     });
-    build_set_fields_body(
+    let mut body = build_set_fields_body(
         str_field("priority"),
         str_field("severity"),
         status,
@@ -614,7 +621,11 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
         &to_strings("cc_add"),
         str_field("product"),
         str_field("component"),
-    )
+    );
+    if !regressed_by_add.is_empty() {
+        body.insert("regressed_by".into(), json!({"add": regressed_by_add}));
+    }
+    body
 }
 
 /// Build the combined PUT /rest/bug/{id} body for apply.
@@ -667,10 +678,11 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     println!("Comment:\n{}", draft["comment"].as_str().unwrap_or(""));
     println!("NI targets: {}", draft["ni_targets"]);
     println!(
-        "Fields: priority={}, severity={}, blocks_add={}, keywords_add={}, cc_add={}, product={}, component={}",
+        "Fields: priority={}, severity={}, blocks_add={}, regressed_by_add={}, keywords_add={}, cc_add={}, product={}, component={}",
         draft["priority"],
         draft["severity"],
         draft["blocks_add"],
+        draft["regressed_by_add"],
         draft["keywords_add"],
         draft["cc_add"],
         draft["product"],
@@ -842,6 +854,24 @@ mod tests {
         assert_eq!(body["blocks"], json!({"add": [123u64]}));
         assert_eq!(body["keywords"], json!({"add": ["regression"]}));
         assert_eq!(body["cc"], json!({"add": ["dev@mozilla.com"]}));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_regressed_by() {
+        let draft = json!({
+            "keywords_add": ["regression"],
+            "regressed_by_add": [2033628u64]
+        });
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["regressed_by"], json!({"add": [2033628u64]}));
+        assert_eq!(body["keywords"], json!({"add": ["regression"]}));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_no_regressed_by_omitted() {
+        let draft = json!({"priority": "P2"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("regressed_by"));
     }
 
     #[test]
@@ -1404,12 +1434,13 @@ fn main() -> anyhow::Result<()> {
             resolution,
             dupe_of,
             blocks_add,
+            regressed_by_add,
             keywords_add,
             cc_add,
             product,
             component,
         } => {
-            let body = build_set_fields_body(
+            let mut body = build_set_fields_body(
                 priority.as_deref(),
                 severity.as_deref(),
                 status.as_deref(),
@@ -1421,6 +1452,12 @@ fn main() -> anyhow::Result<()> {
                 product.as_deref(),
                 component.as_deref(),
             );
+            if !regressed_by_add.is_empty() {
+                body.insert(
+                    "regressed_by".into(),
+                    serde_json::json!({"add": regressed_by_add}),
+                );
+            }
             cmd_set_fields(id, body)?;
         }
         Commands::Apply { id } => cmd_apply(id)?,
