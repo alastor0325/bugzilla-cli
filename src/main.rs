@@ -79,6 +79,9 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// SetFields carries many optional flags, so it dwarfs the unit variants. This
+// enum is parsed once at startup, so the stack-size disparity is irrelevant.
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Run the interactive setup wizard (API key, triage directory, secrets file).
     Setup,
@@ -156,6 +159,9 @@ enum Commands {
         /// Move bug to a different component (e.g. "Graphics: WebRender"). Requires --product if the component exists in multiple products.
         #[arg(long)]
         component: Option<String>,
+        /// Set the assignee (email). Conventionally paired with --status ASSIGNED.
+        #[arg(long)]
+        assigned_to: Option<String>,
     },
 
     /// Apply a pending draft from ~/firefox-triage/pending/bug-{id}.json (comment, NI, field updates).
@@ -625,6 +631,9 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
     if !regressed_by_add.is_empty() {
         body.insert("regressed_by".into(), json!({"add": regressed_by_add}));
     }
+    if let Some(assignee) = str_field("assigned_to") {
+        body.insert("assigned_to".into(), json!(assignee));
+    }
     body
 }
 
@@ -678,9 +687,11 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     println!("Comment:\n{}", draft["comment"].as_str().unwrap_or(""));
     println!("NI targets: {}", draft["ni_targets"]);
     println!(
-        "Fields: priority={}, severity={}, blocks_add={}, regressed_by_add={}, keywords_add={}, cc_add={}, product={}, component={}",
+        "Fields: priority={}, severity={}, status={}, assigned_to={}, blocks_add={}, regressed_by_add={}, keywords_add={}, cc_add={}, product={}, component={}",
         draft["priority"],
         draft["severity"],
+        draft["status"],
+        draft["assigned_to"],
         draft["blocks_add"],
         draft["regressed_by_add"],
         draft["keywords_add"],
@@ -872,6 +883,24 @@ mod tests {
         let draft = json!({"priority": "P2"});
         let body = build_apply_field_body(&draft);
         assert!(!body.contains_key("regressed_by"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_assigned_to() {
+        let draft = json!({
+            "status": "ASSIGNED",
+            "assigned_to": "alwu@mozilla.com"
+        });
+        let body = build_apply_field_body(&draft);
+        assert_eq!(body["assigned_to"], json!("alwu@mozilla.com"));
+        assert_eq!(body["status"], json!("ASSIGNED"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_no_assigned_to_omitted() {
+        let draft = json!({"priority": "P2"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("assigned_to"));
     }
 
     #[test]
@@ -1439,6 +1468,7 @@ fn main() -> anyhow::Result<()> {
             cc_add,
             product,
             component,
+            assigned_to,
         } => {
             let mut body = build_set_fields_body(
                 priority.as_deref(),
@@ -1457,6 +1487,9 @@ fn main() -> anyhow::Result<()> {
                     "regressed_by".into(),
                     serde_json::json!({"add": regressed_by_add}),
                 );
+            }
+            if let Some(assignee) = assigned_to.as_deref() {
+                body.insert("assigned_to".into(), serde_json::json!(assignee));
             }
             cmd_set_fields(id, body)?;
         }
