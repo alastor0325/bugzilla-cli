@@ -103,6 +103,10 @@ enum Commands {
         /// End date (exclusive). Defaults to the following Monday.
         #[arg(long, value_name = "YYYY-MM-DD")]
         end: Option<String>,
+        /// Components to fetch (repeatable). The caller owns the list; when omitted,
+        /// falls back to the built-in default A/V triage set.
+        #[arg(long, num_args = 1..)]
+        component: Vec<String>,
     },
 
     /// Post a comment on a bug.
@@ -429,7 +433,11 @@ fn cmd_get(id: u64, comments: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-const TRIAGE_COMPONENTS: &[&str] = &[
+/// Fallback component set used by `fetch` only when the caller passes no
+/// `--component` flags. The authoritative list lives with the caller (e.g. the
+/// fx-bug-toolkit `/triage` skill via `$TRIAGE_COMPONENTS`); this is just a
+/// sensible default so bare `bugzilla-cli fetch` still works standalone.
+const DEFAULT_TRIAGE_COMPONENTS: &[&str] = &[
     "Audio/Video",
     "Audio/Video: cubeb",
     "Audio/Video: GMP",
@@ -440,12 +448,31 @@ const TRIAGE_COMPONENTS: &[&str] = &[
     "Audio/Video: Web Codecs",
 ];
 
-fn cmd_fetch(start: Option<String>, end: Option<String>) -> anyhow::Result<()> {
+/// Resolve which components `fetch` should query: the caller's list when it
+/// passed any, otherwise the built-in default set. Pure (no I/O) so it is unit-
+/// testable.
+fn resolve_fetch_components(passed: Vec<String>) -> Vec<String> {
+    if passed.is_empty() {
+        DEFAULT_TRIAGE_COMPONENTS
+            .iter()
+            .map(|c| c.to_string())
+            .collect()
+    } else {
+        passed
+    }
+}
+
+fn cmd_fetch(
+    start: Option<String>,
+    end: Option<String>,
+    components: Vec<String>,
+) -> anyhow::Result<()> {
     let client = get_client()?;
 
     let start_date = start.unwrap_or_else(|| monday_of_current_week().to_string());
     let end_date =
         end.unwrap_or_else(|| (monday_of_current_week() + chrono::Duration::days(7)).to_string());
+    let components = resolve_fetch_components(components);
 
     // Use Bugzilla advanced query format, mirroring the canonical triage search URL.
     let mut params: Vec<(&str, &str)> = vec![
@@ -478,8 +505,8 @@ fn cmd_fetch(start: Option<String>, end: Option<String>) -> anyhow::Result<()> {
         ("o9", "notsubstring"),
         ("v9", "core-security"),
     ];
-    for component in TRIAGE_COMPONENTS {
-        params.push(("component", component));
+    for component in &components {
+        params.push(("component", component.as_str()));
     }
     for status in ["UNCONFIRMED", "NEW", "ASSIGNED", "REOPENED"] {
         params.push(("bug_status", status));
@@ -841,6 +868,31 @@ fn cmd_search(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_resolve_fetch_components_uses_caller_list() {
+        let passed = vec![
+            "Audio/Video: Playback".to_string(),
+            "Audio/Video: GMP".to_string(),
+        ];
+        let resolved = resolve_fetch_components(passed.clone());
+        assert_eq!(resolved, passed);
+    }
+
+    #[test]
+    fn test_resolve_fetch_components_falls_back_to_default_when_empty() {
+        let resolved = resolve_fetch_components(vec![]);
+        assert_eq!(resolved.len(), DEFAULT_TRIAGE_COMPONENTS.len());
+        assert_eq!(resolved[0], "Audio/Video");
+        assert!(resolved.iter().any(|c| c == "Web Audio"));
+    }
+
+    #[test]
+    fn test_resolve_fetch_components_does_not_inject_default_into_subset() {
+        // A caller narrowing to a single component must not get the full default set.
+        let resolved = resolve_fetch_components(vec!["Web Audio".to_string()]);
+        assert_eq!(resolved, vec!["Web Audio".to_string()]);
+    }
 
     #[test]
     fn test_build_apply_field_body_all_fields() {
@@ -1452,7 +1504,11 @@ fn main() -> anyhow::Result<()> {
         Commands::Update => cmd_update()?,
         Commands::Setup => cmd_setup()?,
         Commands::Get { id, comments } => cmd_get(id, comments)?,
-        Commands::Fetch { start, end } => cmd_fetch(start, end)?,
+        Commands::Fetch {
+            start,
+            end,
+            component,
+        } => cmd_fetch(start, end, component)?,
         Commands::PostComment { id, text } => cmd_post_comment(id, &text)?,
         Commands::SetNi { id, email } => cmd_set_ni(id, &email)?,
         Commands::SetFields {

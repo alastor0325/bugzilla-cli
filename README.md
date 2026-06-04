@@ -48,8 +48,9 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 |---------|-------------|
 | `bugzilla-cli get <id>` | Show bug metadata and full comment thread |
 | `bugzilla-cli get <id> --no-comments` | Show bug metadata only |
-| `bugzilla-cli fetch` | Fetch triage-queue bugs from the current ISO week |
+| `bugzilla-cli fetch` | Fetch triage-queue bugs from the current ISO week (default component set) |
 | `bugzilla-cli fetch --start YYYY-MM-DD --end YYYY-MM-DD` | Fetch bugs in a custom date range |
+| `bugzilla-cli fetch --component <comp>...` | Fetch only these components (repeatable); the caller owns the list |
 | `bugzilla-cli search <query>` | Search open bugs by summary substring (default: up to 25 results) |
 | `bugzilla-cli search <query> --component <comp>` | Narrow to one or more components (flag is repeatable) |
 | `bugzilla-cli search <query> --full-text` | Also search comments and descriptions |
@@ -77,6 +78,18 @@ To mark duplicate: `bugzilla-cli set-fields <id> --status RESOLVED --resolution 
 | `bugzilla-cli watch-add <id> --title "..." --ni <email>...` | Start watching a bug for needinfo replies |
 | `bugzilla-cli watch-remove <id>` | Stop watching a bug |
 | `bugzilla-cli watch-poll` | Check all watched bugs; reports `replied`, `stale` (≥7 days), `removed` |
+
+### fetch examples
+
+```bash
+bugzilla-cli fetch                                   # default A/V component set, current ISO week
+bugzilla-cli fetch --component "Audio/Video: Playback" --component "Web Audio"
+bugzilla-cli fetch --start 2026-05-01 --component "Audio/Video: GMP"
+```
+
+`fetch` does not own the component list: pass `--component` (repeatable) to scope
+it however the caller wants. When no `--component` is given it falls back to a
+built-in default A/V set so bare `fetch` still works standalone.
 
 ### search examples
 
