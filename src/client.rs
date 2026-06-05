@@ -1,7 +1,9 @@
 pub const BMO_BASE: &str = "https://bugzilla.mozilla.org/rest";
 
 pub struct BmoClient {
-    api_key: String,
+    /// `Some` → authenticated (sends `X-BUGZILLA-API-KEY`, sees private bugs,
+    /// can write). `None` → anonymous: public reads only, stricter rate limits.
+    api_key: Option<String>,
     base: String,
     agent: ureq::Agent,
 }
@@ -12,19 +14,43 @@ impl BmoClient {
     }
 
     pub fn new_with_base(api_key: &str, base: &str) -> Self {
+        Self::build(Some(api_key.to_string()), base)
+    }
+
+    /// Anonymous client — sends no API key. Reads of **public** bugs only;
+    /// writes are rejected by BMO and anonymous requests are rate-limited.
+    pub fn anonymous() -> Self {
+        Self::anonymous_with_base(BMO_BASE)
+    }
+
+    pub fn anonymous_with_base(base: &str) -> Self {
+        Self::build(None, base)
+    }
+
+    fn build(api_key: Option<String>, base: &str) -> Self {
         Self {
-            api_key: api_key.to_string(),
+            api_key,
             base: base.trim_end_matches('/').to_string(),
             agent: ureq::Agent::new(),
         }
     }
 
+    /// Whether an API key is attached (write-capable, private bugs visible).
+    pub fn is_authenticated(&self) -> bool {
+        self.api_key.is_some()
+    }
+
+    /// Attach the API-key header when present; a no-op for anonymous clients.
+    fn auth(&self, req: ureq::Request) -> ureq::Request {
+        match &self.api_key {
+            Some(key) => req.set("X-BUGZILLA-API-KEY", key),
+            None => req,
+        }
+    }
+
     pub fn get(&self, path: &str, params: &[(&str, &str)]) -> anyhow::Result<serde_json::Value> {
         let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
-        let mut req = self
-            .agent
-            .get(&url)
-            .set("X-BUGZILLA-API-KEY", &self.api_key);
+        let mut req = self.auth(self.agent.get(&url));
         for (k, v) in params {
             req = req.query(k, v);
         }
@@ -38,9 +64,7 @@ impl BmoClient {
     pub fn post(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let resp = self
-            .agent
-            .post(&url)
-            .set("X-BUGZILLA-API-KEY", &self.api_key)
+            .auth(self.agent.post(&url))
             .send_json(body.clone())
             .map_err(|e| anyhow::anyhow!("HTTP POST {url}: {e}"))?;
         let val: serde_json::Value = resp.into_json()?;
@@ -50,9 +74,7 @@ impl BmoClient {
     pub fn put(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let resp = self
-            .agent
-            .put(&url)
-            .set("X-BUGZILLA-API-KEY", &self.api_key)
+            .auth(self.agent.put(&url))
             .send_json(body.clone())
             .map_err(|e| anyhow::anyhow!("HTTP PUT {url}: {e}"))?;
         let val: serde_json::Value = resp.into_json()?;
@@ -256,5 +278,30 @@ mod tests {
         let client = make_client(&server);
         let result = client.whoami();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_anonymous_client_sends_no_api_key() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/bug/123")
+            .match_header("x-bugzilla-api-key", mockito::Matcher::Missing)
+            .match_query(mockito::Matcher::UrlEncoded(
+                "include_fields".into(),
+                "_default,flags".into(),
+            ))
+            .with_body(r#"{"bugs":[{"id":123,"summary":"public bug"}]}"#)
+            .with_header("content-type", "application/json")
+            .create();
+        let client = BmoClient::anonymous_with_base(&server.url());
+        assert!(!client.is_authenticated());
+        let val = client.get_bug(123, false).unwrap();
+        assert_eq!(val["bug"]["id"], 123);
+    }
+
+    #[test]
+    fn test_authenticated_client_reports_authenticated() {
+        let client = BmoClient::new_with_base("k", "http://example.invalid");
+        assert!(client.is_authenticated());
     }
 }

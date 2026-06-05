@@ -2,6 +2,21 @@
 
 Thin BMO REST client. Written in Rust using `ureq` for HTTP and `clap` for the CLI.
 
+## Modes
+
+bugzilla-cli has two modes:
+
+- **Read-only (default, no API key).** `get`, `fetch`, `search`, and `watch-poll`
+  work anonymously against BMO's public REST API — no setup required. Caveats:
+  **security-restricted bugs are not visible**, and anonymous requests are
+  rate-limited.
+- **Write / reply mode (API key).** Adds `post-comment`, `set-ni`, `set-fields`,
+  and `apply`. Enable it with `bugzilla-cli setup` (choose write mode and provide
+  a key).
+
+A configured key is also used for reads, so a write-mode user automatically sees
+private bugs and gets higher rate limits.
+
 ## Install
 
 For coworkers (no checkout required):
@@ -18,17 +33,21 @@ cargo install --path .
 
 ## Setup
 
+Setup is **only needed for write/reply mode** — reads work without it.
+
 ```bash
 bugzilla-cli setup
 ```
 
-The wizard will:
-1. Prompt for your BMO base URL and API key
-2. Verify the key with `GET /rest/whoami`
-3. Create `~/firefox-triage/{bugs,pending,reports,archive}/`
-4. Write `~/.config/triage/secrets` (chmod 600) with `export BUGZILLA_BOT_API_KEY=...`
+The wizard:
+1. Prompts for your BMO base URL.
+2. Asks whether to enable **write operations**:
+   - **No (read-only):** skips the API key — only the triage directory is created.
+   - **Yes (write):** prompts for an API key and verifies it with `GET /rest/whoami`.
+3. Creates `~/firefox-triage/{bugs,pending,reports,archive,knowledge}/`.
+4. In write mode, writes `~/.config/triage/secrets` (chmod 600) with `export BUGZILLA_BOT_API_KEY=...`.
 
-Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
+In write mode, add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 
 ## Commands
 
@@ -37,12 +56,15 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 | Command | Description |
 |---------|-------------|
 | `bugzilla-cli whoami` | Print the BMO login (email) tied to the stored API key |
-| `bugzilla-cli setup` | Interactive wizard: API key, triage directory, secrets file |
+| `bugzilla-cli setup` | Interactive wizard: choose read-only or write mode, (write only) API key + secrets file, triage directory |
 | `bugzilla-cli version` | Print version and git commit hash |
 | `bugzilla-cli update` | Update to the latest version — `git pull + cargo build` for dev symlink installs, `cargo install --git <repo>` for `cargo install` installs |
 | `bugzilla-cli --version` | Print version (short form) |
 
 ### Reading bugs
+
+These work **without an API key** (public bugs only). A configured key adds
+private-bug visibility and higher rate limits.
 
 | Command | Description |
 |---------|-------------|
@@ -58,6 +80,8 @@ Add `source ~/.config/triage/secrets` to your `~/.zshrc`.
 | `bugzilla-cli search <query> --limit <n>` | Cap result count |
 
 ### Writing bugs
+
+These **require an API key** — run `bugzilla-cli setup` and choose write mode.
 
 | Command | Description |
 |---------|-------------|

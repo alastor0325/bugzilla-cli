@@ -63,12 +63,61 @@ fn get_client() -> anyhow::Result<BmoClient> {
     anyhow::bail!("Not configured. Run `bugzilla-cli setup`.")
 }
 
+/// Client for **read** commands. Uses the stored API key when present (so a
+/// configured user still sees private bugs and gets higher rate limits);
+/// otherwise returns an anonymous client and warns that this means public bugs
+/// only. Never bails — reads work with no configuration.
+fn read_client() -> BmoClient {
+    if let Ok(key) = std::env::var("BUGZILLA_BOT_API_KEY")
+        && !key.is_empty()
+    {
+        return BmoClient::new(&key);
+    }
+    if let Some(key) = read_secrets_file() {
+        return BmoClient::new(&key);
+    }
+    eprintln!(
+        "\u{26a0} No API key configured \u{2014} read-only mode: security-restricted bugs \
+         are not visible and anonymous requests are rate-limited. Run `bugzilla-cli setup` \
+         to enable writes."
+    );
+    BmoClient::anonymous()
+}
+
+/// Commands that require an API key (writes + `whoami`). Read commands
+/// (`get`/`fetch`/`search`/`watch-poll`), local watch-list edits, and
+/// `setup`/`version`/`update` run without one.
+fn requires_auth(cmd: &Commands) -> bool {
+    matches!(
+        cmd,
+        Commands::PostComment { .. }
+            | Commands::SetNi { .. }
+            | Commands::SetFields { .. }
+            | Commands::Apply { .. }
+            | Commands::Whoami
+    )
+}
+
 fn prompt(label: &str) -> anyhow::Result<String> {
     print!("{label}");
     io::stdout().flush()?;
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line)?;
     Ok(line.trim().to_string())
+}
+
+/// Parse a yes/no answer. `y`/`yes` → true, `n`/`no` → false (case-insensitive);
+/// empty or anything unrecognized falls back to `default`.
+fn parse_yes_no(input: &str, default: bool) -> bool {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => true,
+        "n" | "no" => false,
+        _ => default,
+    }
+}
+
+fn prompt_yes_no(label: &str, default: bool) -> anyhow::Result<bool> {
+    Ok(parse_yes_no(&prompt(label)?, default))
 }
 
 #[derive(Parser)]
@@ -316,20 +365,36 @@ fn cmd_setup() -> anyhow::Result<()> {
     };
     println!("  \u{2713} Using {url}");
 
-    // Step 2: API key
+    // Step 2: Mode — read-only (no key) vs write / reply (key required)
     println!();
-    println!("Step 2: BMO API key");
-    println!("  Generate one at: https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey");
-    println!("  The key will be verified against BMO before being saved.");
-    let api_key = prompt("  API key: ")?;
-    if api_key.is_empty() {
-        anyhow::bail!("API key is required.");
-    }
-    let test_client = BmoClient::new_with_base(&api_key, &url);
-    print!("  Verifying... ");
-    io::stdout().flush()?;
-    let me = test_client.whoami().context("Authentication failed")?;
-    println!("\u{2713} Authenticated as {}", format_whoami(&me));
+    println!("Step 2: Mode");
+    println!("  read-only  \u{2014} fetch / search / get public bugs; no API key needed.");
+    println!(
+        "  write      \u{2014} also post comments, set needinfo, update fields; needs an API key."
+    );
+    let want_write = prompt_yes_no("  Enable write operations (reply mode)? [y/N]: ", false)?;
+    let api_key: Option<String> = if want_write {
+        println!("  Generate a key at: https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey");
+        println!("  It is verified against BMO before being saved.");
+        let key = prompt("  API key: ")?;
+        if key.is_empty() {
+            anyhow::bail!(
+                "API key is required for write mode (re-run and choose read-only to skip it)."
+            );
+        }
+        let test_client = BmoClient::new_with_base(&key, &url);
+        print!("  Verifying... ");
+        io::stdout().flush()?;
+        let me = test_client.whoami().context("Authentication failed")?;
+        println!("\u{2713} Authenticated as {}", format_whoami(&me));
+        Some(key)
+    } else {
+        println!(
+            "  \u{2713} Read-only mode \u{2014} no API key. Security-restricted bugs won't be \
+             visible and writes are disabled."
+        );
+        None
+    };
 
     // Step 3: Triage directory
     let default_triage = triage_dir().display().to_string();
@@ -352,29 +417,38 @@ fn cmd_setup() -> anyhow::Result<()> {
         triage_path.display()
     );
 
-    // Step 4: Secrets file
+    // Step 4: Saving credentials (write mode only)
     println!();
     println!("Step 4: Saving credentials");
-    println!("  Your API key will be written to ~/.config/triage/secrets (chmod 600).");
-    println!("  That file is outside this repo and never committed.");
-    let secrets_file = dirs::home_dir().unwrap().join(".config/triage/secrets");
-    std::fs::create_dir_all(secrets_file.parent().unwrap())?;
-    std::fs::write(
-        &secrets_file,
-        format!("export BUGZILLA_BOT_API_KEY={api_key}\n"),
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&secrets_file, std::fs::Permissions::from_mode(0o600))?;
+    match &api_key {
+        Some(key) => {
+            println!("  Your API key will be written to ~/.config/triage/secrets (chmod 600).");
+            println!("  That file is outside this repo and never committed.");
+            let secrets_file = dirs::home_dir().unwrap().join(".config/triage/secrets");
+            std::fs::create_dir_all(secrets_file.parent().unwrap())?;
+            std::fs::write(
+                &secrets_file,
+                format!("export BUGZILLA_BOT_API_KEY={key}\n"),
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&secrets_file, std::fs::Permissions::from_mode(0o600))?;
+            }
+            println!("  \u{2713} API key saved to {}", secrets_file.display());
+            println!();
+            println!("Add this to your ~/.zshrc:");
+            println!("  source {}", secrets_file.display());
+            println!();
+            println!("Setup complete (write mode).");
+        }
+        None => {
+            println!("  Read-only mode \u{2014} no credentials to save.");
+            println!("  Re-run `bugzilla-cli setup` and choose write mode to add a key later.");
+            println!();
+            println!("Setup complete (read-only mode).");
+        }
     }
-    println!("  \u{2713} API key saved to {}", secrets_file.display());
-
-    println!();
-    println!("Add this to your ~/.zshrc:");
-    println!("  source {}", secrets_file.display());
-    println!();
-    println!("Setup complete.");
     Ok(())
 }
 
@@ -425,7 +499,7 @@ fn format_comments(comments: &[serde_json::Value]) -> String {
 }
 
 fn cmd_get(id: u64, comments: bool) -> anyhow::Result<()> {
-    let client = get_client()?;
+    let client = read_client();
     let data = client.get_bug(id, comments)?;
     print!("{}", format_bug_header(&data["bug"]));
     if comments {
@@ -470,7 +544,7 @@ fn cmd_fetch(
     end: Option<String>,
     components: Vec<String>,
 ) -> anyhow::Result<()> {
-    let client = get_client()?;
+    let client = read_client();
 
     let start_date = start.unwrap_or_else(|| monday_of_current_week().to_string());
     let end_date =
@@ -868,7 +942,7 @@ fn cmd_search(
     full_text: bool,
     all_statuses: bool,
 ) -> anyhow::Result<()> {
-    let client = get_client()?;
+    let client = read_client();
     let params = build_search_params(query, components, product, limit, full_text, all_statuses);
     let param_refs: Vec<(&str, &str)> = params
         .iter()
@@ -887,10 +961,51 @@ fn cmd_search(
     Ok(())
 }
 
+// The command handlers (cmd_watch_*, main) intentionally follow this test
+// module; relocating them is out of scope for behavioural changes.
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_parse_yes_no() {
+        assert!(parse_yes_no("y", false));
+        assert!(parse_yes_no("Y", false));
+        assert!(parse_yes_no("yes", false));
+        assert!(parse_yes_no("  YES  ", false));
+        assert!(!parse_yes_no("n", true));
+        assert!(!parse_yes_no("no", true));
+        assert!(!parse_yes_no("NO", true));
+        // empty and unrecognized fall back to the default
+        assert!(!parse_yes_no("", false));
+        assert!(parse_yes_no("", true));
+        assert!(!parse_yes_no("maybe", false));
+        assert!(parse_yes_no("maybe", true));
+    }
+
+    #[test]
+    fn test_requires_auth() {
+        // writes + whoami require a key
+        assert!(requires_auth(&Commands::PostComment {
+            id: 1,
+            text: "x".into()
+        }));
+        assert!(requires_auth(&Commands::SetNi {
+            id: 1,
+            email: vec![]
+        }));
+        assert!(requires_auth(&Commands::Apply { id: 1 }));
+        assert!(requires_auth(&Commands::Whoami));
+        // reads + local watch edits do not
+        assert!(!requires_auth(&Commands::Get {
+            id: 1,
+            comments: false
+        }));
+        assert!(!requires_auth(&Commands::WatchPoll));
+        assert!(!requires_auth(&Commands::WatchRemove { id: 1 }));
+    }
 
     #[test]
     fn test_resolve_fetch_components_uses_caller_list() {
@@ -1537,7 +1652,7 @@ fn cmd_watch_remove(id: u64) -> anyhow::Result<()> {
 }
 
 fn cmd_watch_poll() -> anyhow::Result<()> {
-    let client = get_client()?;
+    let client = read_client();
     let result = WatchList::load(&watch_file_path())?.poll(&client)?;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -1545,9 +1660,11 @@ fn cmd_watch_poll() -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    // Version and Update don't need API access; skip the config check for them.
-    if !matches!(cli.command, Commands::Version | Commands::Update) && !is_configured() {
-        println!("bugzilla-cli is not configured yet. Starting setup...\n");
+    // Only commands that write to Bugzilla (or `whoami`) need an API key. Read
+    // commands run anonymously, so don't force setup for them — let them work
+    // read-only.
+    if requires_auth(&cli.command) && !is_configured() {
+        println!("This command writes to Bugzilla and needs an API key. Starting setup...\n");
         cmd_setup()?;
         println!();
     }
