@@ -151,6 +151,9 @@ enum Commands {
         /// Add one or more bug IDs to the regressed_by list (the change(s) that caused this regression).
         #[arg(long, num_args = 1..)]
         regressed_by_add: Vec<u64>,
+        /// Add one or more bug IDs to the See Also list (related bugs; stored as canonical BMO URLs).
+        #[arg(long, num_args = 1..)]
+        see_also_add: Vec<u64>,
         /// Add one or more keywords.
         #[arg(long, num_args = 1..)]
         keywords_add: Vec<String>,
@@ -552,6 +555,15 @@ fn cmd_set_ni(id: u64, emails: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Map bug IDs to canonical BMO web URLs for the `see_also` field. BMO stores
+/// See Also entries as URLs; derive the web base by trimming the REST suffix.
+fn see_also_urls(ids: &[u64]) -> Vec<String> {
+    let base = BMO_BASE.trim_end_matches("/rest").trim_end_matches('/');
+    ids.iter()
+        .map(|id| format!("{base}/show_bug.cgi?id={id}"))
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)] // mirrors clap's flat arg list 1:1; no meaningful grouping exists
 fn build_set_fields_body(
     priority: Option<&str>,
@@ -633,6 +645,10 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
         .unwrap_or_default();
+    let see_also_add: Vec<u64> = draft["see_also_add"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .unwrap_or_default();
     // BMO rejects a `resolution` unless the bug is also moved to a closed
     // status. Triage drafts carry `resolution` (and `dupe_of`) but no
     // explicit `status`, so default it to RESOLVED whenever a resolution is
@@ -657,6 +673,12 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
     );
     if !regressed_by_add.is_empty() {
         body.insert("regressed_by".into(), json!({"add": regressed_by_add}));
+    }
+    if !see_also_add.is_empty() {
+        body.insert(
+            "see_also".into(),
+            json!({"add": see_also_urls(&see_also_add)}),
+        );
     }
     if let Some(assignee) = str_field("assigned_to") {
         body.insert("assigned_to".into(), json!(assignee));
@@ -714,13 +736,14 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
     println!("Comment:\n{}", draft["comment"].as_str().unwrap_or(""));
     println!("NI targets: {}", draft["ni_targets"]);
     println!(
-        "Fields: priority={}, severity={}, status={}, assigned_to={}, blocks_add={}, regressed_by_add={}, keywords_add={}, cc_add={}, product={}, component={}",
+        "Fields: priority={}, severity={}, status={}, assigned_to={}, blocks_add={}, regressed_by_add={}, see_also_add={}, keywords_add={}, cc_add={}, product={}, component={}",
         draft["priority"],
         draft["severity"],
         draft["status"],
         draft["assigned_to"],
         draft["blocks_add"],
         draft["regressed_by_add"],
+        draft["see_also_add"],
         draft["keywords_add"],
         draft["cc_add"],
         draft["product"],
@@ -935,6 +958,35 @@ mod tests {
         let draft = json!({"priority": "P2"});
         let body = build_apply_field_body(&draft);
         assert!(!body.contains_key("regressed_by"));
+    }
+
+    #[test]
+    fn test_build_apply_field_body_see_also() {
+        let draft = json!({"see_also_add": [1837553u64, 1501982u64]});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(
+            body["see_also"],
+            json!({"add": [
+                "https://bugzilla.mozilla.org/show_bug.cgi?id=1837553",
+                "https://bugzilla.mozilla.org/show_bug.cgi?id=1501982"
+            ]})
+        );
+    }
+
+    #[test]
+    fn test_build_apply_field_body_no_see_also_omitted() {
+        let draft = json!({"priority": "P2"});
+        let body = build_apply_field_body(&draft);
+        assert!(!body.contains_key("see_also"));
+    }
+
+    #[test]
+    fn test_see_also_urls_maps_ids_to_bmo_urls() {
+        assert_eq!(
+            see_also_urls(&[123u64]),
+            vec!["https://bugzilla.mozilla.org/show_bug.cgi?id=123".to_string()]
+        );
+        assert!(see_also_urls(&[]).is_empty());
     }
 
     #[test]
@@ -1520,6 +1572,7 @@ fn main() -> anyhow::Result<()> {
             dupe_of,
             blocks_add,
             regressed_by_add,
+            see_also_add,
             keywords_add,
             cc_add,
             product,
@@ -1542,6 +1595,12 @@ fn main() -> anyhow::Result<()> {
                 body.insert(
                     "regressed_by".into(),
                     serde_json::json!({"add": regressed_by_add}),
+                );
+            }
+            if !see_also_add.is_empty() {
+                body.insert(
+                    "see_also".into(),
+                    serde_json::json!({"add": see_also_urls(&see_also_add)}),
                 );
             }
             if let Some(assignee) = assigned_to.as_deref() {
