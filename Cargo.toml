@@ -2,6 +2,13 @@
 name = "bugzilla-cli"
 version = "0.2.0"
 edition = "2024"
+description = "Thin Bugzilla (BMO) REST client — fetch, search, and (with an API key) reply to bugs."
+license = "MIT"
+repository = "https://github.com/alastor0325/bugzilla-cli"
+readme = "README.md"
+keywords = ["bugzilla", "bmo", "cli", "firefox", "rest"]
+categories = ["command-line-utilities"]
+exclude = [".claude/", "CLAUDE.md", ".pre-commit-config.yaml", "Makefile"]
 
 [lib]
 name = "bugzilla_cli"
