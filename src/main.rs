@@ -63,17 +63,39 @@ fn get_client() -> anyhow::Result<BmoClient> {
     anyhow::bail!("Not configured. Run `bugzilla-cli setup`.")
 }
 
-/// Client for **read** commands. Uses the stored API key when present (so a
-/// configured user still sees private bugs and gets higher rate limits);
-/// otherwise returns an anonymous client and warns that this means public bugs
-/// only. Never bails — reads work with no configuration.
+/// Resolve which API key a read command should use, in precedence order:
+/// 1. `BUGZILLA_API_KEY` — a **personal** identity (e.g. for `assigned` /
+///    `needinfos` dashboard queries run as yourself, not the triage bot).
+/// 2. `BUGZILLA_BOT_API_KEY` — the triage-bot key (env, then secrets file).
+///
+/// Returns `None` when nothing is set (anonymous, public bugs only). Pure — the
+/// caller passes already-read values — so it is unit-testable. Empty strings are
+/// treated as unset so an exported-but-blank var falls through to the next
+/// source. Keys are never placed on argv (no `--api-key` flag), so they don't
+/// leak via `ps`.
+fn resolve_read_key(
+    personal: Option<String>,
+    bot: Option<String>,
+    secrets: Option<String>,
+) -> Option<String> {
+    personal
+        .filter(|k| !k.is_empty())
+        .or_else(|| bot.filter(|k| !k.is_empty()))
+        .or_else(|| secrets.filter(|k| !k.is_empty()))
+}
+
+/// Client for **read** commands. Uses a resolved API key when present (personal
+/// key first, then the bot key/secrets file) so a configured user still sees
+/// private bugs and gets higher rate limits; otherwise returns an anonymous
+/// client and warns that this means public bugs only. Never bails — reads work
+/// with no configuration.
 fn read_client() -> BmoClient {
-    if let Ok(key) = std::env::var("BUGZILLA_BOT_API_KEY")
-        && !key.is_empty()
-    {
-        return BmoClient::new(&key);
-    }
-    if let Some(key) = read_secrets_file() {
+    let key = resolve_read_key(
+        std::env::var("BUGZILLA_API_KEY").ok(),
+        std::env::var("BUGZILLA_BOT_API_KEY").ok(),
+        read_secrets_file(),
+    );
+    if let Some(key) = key {
         return BmoClient::new(&key);
     }
     eprintln!(
@@ -269,6 +291,29 @@ enum Commands {
         /// Include resolved/closed bugs (default: open bugs only).
         #[arg(long)]
         all_statuses: bool,
+    },
+
+    /// List a user's OPEN (unresolved) assigned bugs. Reads only; runs as the
+    /// personal identity when BUGZILLA_API_KEY is set.
+    Assigned {
+        /// Assignee email to query.
+        #[arg(long)]
+        user: String,
+        /// Emit a JSON array of bug objects to stdout instead of a text list.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List bugs where a user has an active needinfo? request (they are the
+    /// requestee). Reads only; runs as the personal identity when
+    /// BUGZILLA_API_KEY is set.
+    Needinfos {
+        /// Requestee email to query (the person being asked for info).
+        #[arg(long)]
+        user: String,
+        /// Emit a JSON array of bug objects to stdout instead of a text list.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Print version and git commit hash.
@@ -934,6 +979,70 @@ fn build_search_params(
     params
 }
 
+/// Render one bug as a concise human-readable line. Shared by `search`,
+/// `assigned`, and `needinfos` so their text output stays consistent. Pure.
+fn format_bug_line(bug: &serde_json::Value) -> String {
+    let id = bug["id"].as_u64().unwrap_or(0);
+    let summary = bug["summary"].as_str().unwrap_or("?");
+    let status = bug["status"].as_str().unwrap_or("?");
+    let priority = bug["priority"].as_str().unwrap_or("--");
+    format!("Bug {id}: [{status} {priority}] {summary}")
+}
+
+/// Serialize a bug list to the `--json` output: a pretty JSON array on stdout.
+/// Bugs are passed through as BMO returned them (with `include_fields`), so each
+/// object carries at least id/summary/status/last_change_time/assigned_to/flags.
+/// Pure so it is unit-testable.
+fn bugs_to_json(bugs: &[serde_json::Value]) -> String {
+    serde_json::to_string_pretty(bugs).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// `include_fields` value requesting the `--json` contract fields. `_default`
+/// covers id/summary/status/last_change_time/assigned_to; `flags` is added
+/// because `search` (unlike `get_bug`) does not append it itself.
+const CONTRACT_INCLUDE_FIELDS: &str = "_default,flags";
+
+/// Build the `/bug` query params for `assigned`: OPEN (unresolved) bugs owned by
+/// `user`. `resolution=---` selects unresolved bugs. Pure.
+fn build_assigned_params(user: &str) -> Vec<(String, String)> {
+    vec![
+        ("assigned_to".into(), user.to_string()),
+        ("resolution".into(), "---".into()),
+        ("include_fields".into(), CONTRACT_INCLUDE_FIELDS.into()),
+    ]
+}
+
+/// Build the `/bug` query params for `needinfos`: bugs where `user` is an active
+/// `needinfo?` requestee, via BMO quicksearch. Pure.
+fn build_needinfos_params(user: &str) -> Vec<(String, String)> {
+    vec![
+        ("quicksearch".into(), format!("flag:needinfo?{user}")),
+        ("include_fields".into(), CONTRACT_INCLUDE_FIELDS.into()),
+    ]
+}
+
+/// Shared read-only query runner for `assigned` / `needinfos`. Runs the search,
+/// then either prints a JSON array (stdout only) or a human-readable list.
+fn run_query(params: Vec<(String, String)>, json: bool) -> anyhow::Result<()> {
+    let client = read_client();
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let bugs = client.search(&param_refs)?;
+
+    if json {
+        // Contract: stdout is the JSON array and nothing else.
+        println!("{}", bugs_to_json(&bugs));
+    } else {
+        for bug in &bugs {
+            println!("{}", format_bug_line(bug));
+        }
+        eprintln!("\n# {} bug(s) found", bugs.len());
+    }
+    Ok(())
+}
+
 fn cmd_search(
     query: &str,
     components: &[String],
@@ -942,23 +1051,11 @@ fn cmd_search(
     full_text: bool,
     all_statuses: bool,
 ) -> anyhow::Result<()> {
-    let client = read_client();
-    let params = build_search_params(query, components, product, limit, full_text, all_statuses);
-    let param_refs: Vec<(&str, &str)> = params
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let bugs = client.search(&param_refs)?;
-
-    for bug in &bugs {
-        let id = bug["id"].as_u64().unwrap_or(0);
-        let summary = bug["summary"].as_str().unwrap_or("?");
-        let status = bug["status"].as_str().unwrap_or("?");
-        let priority = bug["priority"].as_str().unwrap_or("--");
-        println!("Bug {id}: [{status} {priority}] {summary}");
-    }
-    eprintln!("\n# {} bug(s) found", bugs.len());
-    Ok(())
+    // `search` always emits the human-readable list; it has no `--json` mode.
+    run_query(
+        build_search_params(query, components, product, limit, full_text, all_statuses),
+        false,
+    )
 }
 
 // The command handlers (cmd_watch_*, main) intentionally follow this test
@@ -1564,6 +1661,185 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_read_key_prefers_personal() {
+        // Personal key wins over the bot key and secrets file.
+        let key = resolve_read_key(
+            Some("personal".into()),
+            Some("bot".into()),
+            Some("secrets".into()),
+        );
+        assert_eq!(key.as_deref(), Some("personal"));
+    }
+
+    #[test]
+    fn test_resolve_read_key_falls_back_to_bot() {
+        // No personal key → bot key (env) is used.
+        let key = resolve_read_key(None, Some("bot".into()), Some("secrets".into()));
+        assert_eq!(key.as_deref(), Some("bot"));
+    }
+
+    #[test]
+    fn test_resolve_read_key_falls_back_to_secrets() {
+        // Neither env var set → secrets file value.
+        let key = resolve_read_key(None, None, Some("secrets".into()));
+        assert_eq!(key.as_deref(), Some("secrets"));
+    }
+
+    #[test]
+    fn test_resolve_read_key_none_when_all_unset() {
+        assert!(resolve_read_key(None, None, None).is_none());
+    }
+
+    #[test]
+    fn test_resolve_read_key_treats_empty_as_unset() {
+        // An exported-but-blank personal/bot var must fall through, not win.
+        let key = resolve_read_key(Some("".into()), Some("".into()), Some("secrets".into()));
+        assert_eq!(key.as_deref(), Some("secrets"));
+        // Empty everywhere → anonymous.
+        assert!(resolve_read_key(Some("".into()), Some("".into()), Some("".into())).is_none());
+    }
+
+    #[test]
+    fn test_build_assigned_params() {
+        let params = build_assigned_params("alwu@mozilla.com");
+        assert_eq!(
+            param(&params, "assigned_to").as_deref(),
+            Some("alwu@mozilla.com")
+        );
+        // "Open" == unresolved.
+        assert_eq!(param(&params, "resolution").as_deref(), Some("---"));
+        // Contract fields must be requested (search doesn't append them itself).
+        assert_eq!(
+            param(&params, "include_fields").as_deref(),
+            Some("_default,flags")
+        );
+    }
+
+    #[test]
+    fn test_build_needinfos_params() {
+        let params = build_needinfos_params("alwu@mozilla.com");
+        assert_eq!(
+            param(&params, "quicksearch").as_deref(),
+            Some("flag:needinfo?alwu@mozilla.com")
+        );
+        assert_eq!(
+            param(&params, "include_fields").as_deref(),
+            Some("_default,flags")
+        );
+    }
+
+    #[test]
+    fn test_format_bug_line_matches_search_style() {
+        let bug = json!({
+            "id": 42,
+            "summary": "crash on seek",
+            "status": "NEW",
+            "priority": "P2"
+        });
+        assert_eq!(format_bug_line(&bug), "Bug 42: [NEW P2] crash on seek");
+    }
+
+    #[test]
+    fn test_format_bug_line_defaults_missing_fields() {
+        let bug = json!({"id": 7});
+        assert_eq!(format_bug_line(&bug), "Bug 7: [? --] ?");
+    }
+
+    #[test]
+    fn test_bugs_to_json_emits_contract_fields() {
+        let bugs = vec![json!({
+            "id": 5,
+            "summary": "ni bug",
+            "status": "NEW",
+            "last_change_time": "2026-07-01T00:00:00Z",
+            "assigned_to": "someone@mozilla.com",
+            "flags": [{"name": "needinfo", "status": "?", "requestee": "alwu@mozilla.com"}]
+        })];
+        let out = bugs_to_json(&bugs);
+        // Round-trips to a JSON array preserving every contract field.
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+        let b = &parsed[0];
+        assert_eq!(b["id"], json!(5));
+        assert_eq!(b["summary"], json!("ni bug"));
+        assert_eq!(b["status"], json!("NEW"));
+        assert_eq!(b["last_change_time"], json!("2026-07-01T00:00:00Z"));
+        assert_eq!(b["assigned_to"], json!("someone@mozilla.com"));
+        assert_eq!(b["flags"][0]["requestee"], json!("alwu@mozilla.com"));
+    }
+
+    #[test]
+    fn test_bugs_to_json_empty_is_array() {
+        assert_eq!(bugs_to_json(&[]), "[]");
+    }
+
+    #[test]
+    fn test_needinfos_search_mocked() {
+        // Verify the needinfos query against a mocked BMO response, following the
+        // existing mock-base-URL pattern. Asserts the quicksearch flag param is
+        // sent and the returned bug carries the contract fields incl. flags.
+        use mockito::Server;
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/bug")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded(
+                    "quicksearch".into(),
+                    "flag:needinfo?alwu@mozilla.com".into(),
+                ),
+                mockito::Matcher::UrlEncoded("include_fields".into(), "_default,flags".into()),
+            ]))
+            .with_body(
+                r#"{"bugs":[{"id":5,"summary":"ni bug","status":"NEW","last_change_time":"2026-07-01T00:00:00Z","assigned_to":"someone@mozilla.com","flags":[{"name":"needinfo","status":"?","requestee":"alwu@mozilla.com"}]}]}"#,
+            )
+            .with_header("content-type", "application/json")
+            .create();
+
+        let params = build_needinfos_params("alwu@mozilla.com");
+        let refs: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let client = BmoClient::new_with_base("test-key", &server.url());
+        let bugs = client.search(&refs).unwrap();
+
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0]["id"], json!(5));
+        assert_eq!(bugs[0]["flags"][0]["requestee"], json!("alwu@mozilla.com"));
+    }
+
+    #[test]
+    fn test_assigned_search_mocked() {
+        // Mocked verification for `assigned`: open (resolution=---) bugs owned by
+        // the user, with contract fields requested.
+        use mockito::Server;
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/bug")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("assigned_to".into(), "alwu@mozilla.com".into()),
+                mockito::Matcher::UrlEncoded("resolution".into(), "---".into()),
+            ]))
+            .with_body(
+                r#"{"bugs":[{"id":9,"summary":"my open bug","status":"ASSIGNED","last_change_time":"2026-07-02T00:00:00Z","assigned_to":"alwu@mozilla.com","flags":[]}]}"#,
+            )
+            .with_header("content-type", "application/json")
+            .create();
+
+        let params = build_assigned_params("alwu@mozilla.com");
+        let refs: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let client = BmoClient::new_with_base("test-key", &server.url());
+        let bugs = client.search(&refs).unwrap();
+
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0]["assigned_to"], json!("alwu@mozilla.com"));
+        assert_eq!(bugs[0]["status"], json!("ASSIGNED"));
+    }
+
+    #[test]
     fn test_build_comment_body_sets_is_markdown() {
         let body = build_comment_body("**bold** text");
         assert_eq!(body["comment"], json!("**bold** text"));
@@ -1745,6 +2021,8 @@ fn main() -> anyhow::Result<()> {
             full_text,
             all_statuses,
         )?,
+        Commands::Assigned { user, json } => run_query(build_assigned_params(&user), json)?,
+        Commands::Needinfos { user, json } => run_query(build_needinfos_params(&user), json)?,
     }
     Ok(())
 }

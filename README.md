@@ -17,6 +17,24 @@ bugzilla-cli has two modes:
 A configured key is also used for reads, so a write-mode user automatically sees
 private bugs and gets higher rate limits.
 
+### Personal identity for queries (`BUGZILLA_API_KEY`)
+
+The `assigned` and `needinfos` commands are meant to be run as **yourself**, not
+as the triage bot. Set `BUGZILLA_API_KEY` to your **personal** BMO API key and
+it takes precedence over the bot key for all read commands. Key resolution order
+for reads is:
+
+1. `BUGZILLA_API_KEY` — your personal identity (highest precedence).
+2. `BUGZILLA_BOT_API_KEY` — the triage-bot key (env var, then the
+   `~/.config/triage/secrets` file).
+3. None → anonymous (public bugs only).
+
+Pass the key **only via the environment variable** — there is deliberately no
+`--api-key` flag, so your secret never appears on the process argument list
+(`ps`). If no key is set, the commands still work anonymously against public
+bugs. Generate a personal key at
+<https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey>.
+
 ## Install
 
 For coworkers (no checkout required):
@@ -78,6 +96,36 @@ private-bug visibility and higher rate limits.
 | `bugzilla-cli search <query> --full-text` | Also search comments and descriptions |
 | `bugzilla-cli search <query> --all-statuses` | Include resolved/closed bugs |
 | `bugzilla-cli search <query> --limit <n>` | Cap result count |
+| `bugzilla-cli assigned --user <email>` | List a user's OPEN (unresolved) assigned bugs |
+| `bugzilla-cli assigned --user <email> --json` | Same, as a JSON array on stdout |
+| `bugzilla-cli needinfos --user <email>` | List bugs where the user has an active `needinfo?` request |
+| `bugzilla-cli needinfos --user <email> --json` | Same, as a JSON array on stdout |
+
+`assigned` and `needinfos` are personal-dashboard queries: run them as yourself
+by setting `BUGZILLA_API_KEY` (see [Personal identity](#personal-identity-for-queries-bugzilla_api_key)).
+
+**`--json` output.** Prints a JSON array of bug objects to stdout (and nothing
+else on stdout; a result count goes to stderr). Each object includes at least:
+
+```json
+{
+  "id": 123,
+  "summary": "…",
+  "status": "ASSIGNED",
+  "last_change_time": "2026-07-01T00:00:00Z",
+  "assigned_to": "you@mozilla.com",
+  "flags": [ { "name": "needinfo", "status": "?", "requestee": "you@mozilla.com" } ]
+}
+```
+
+Without `--json`, output is a concise text list matching `search`
+(`Bug <id>: [<status> <priority>] <summary>`).
+
+```bash
+bugzilla-cli assigned --user you@mozilla.com
+bugzilla-cli assigned --user you@mozilla.com --json
+bugzilla-cli needinfos --user you@mozilla.com --json
+```
 
 ### Writing bugs
 
@@ -193,6 +241,6 @@ BUGZILLA_BOT_API_KEY=your-key cargo test -- --ignored
 
 ## Security
 
-- API key is read from `$BUGZILLA_BOT_API_KEY` environment variable only — never stored in the repo.
+- API keys are read from the `$BUGZILLA_API_KEY` (personal) and `$BUGZILLA_BOT_API_KEY` (bot) environment variables — never stored in the repo, and never passed on argv (no `--api-key` flag), so they don't leak via `ps`.
 - `~/.config/triage/secrets` is outside the repo and excluded by `.gitignore`.
 - The `no-secrets` pre-commit hook rejects any commit that writes `API_KEY=` into source.
