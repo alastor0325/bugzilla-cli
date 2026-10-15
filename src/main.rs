@@ -1979,7 +1979,7 @@ mod tests {
         assert_eq!(
             serde_json::Value::Object(body),
             json!({
-                "flags": [{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com"}],
+                "flags": [{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com", "new": true}],
                 "comment": {"body": "need info", "is_markdown": true},
                 "comment_tags": ["gecko-triage"]
             })
