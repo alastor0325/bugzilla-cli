@@ -651,8 +651,10 @@ fn build_comment_body(text: &str) -> serde_json::Value {
     json!({"comment": text, "is_markdown": true})
 }
 
+/// Build a needinfo flag for a bug-update PUT. `new: true` stops BMO from
+/// updating an existing needinfo of the same name instead of adding one.
 fn build_needinfo_flag(requestee: &str) -> serde_json::Value {
-    json!({"name": "needinfo", "status": "?", "requestee": requestee})
+    json!({"name": "needinfo", "status": "?", "requestee": requestee, "new": true})
 }
 
 fn cmd_post_comment(id: u64, text: &str) -> anyhow::Result<()> {
@@ -1460,6 +1462,15 @@ mod tests {
     }
 
     #[test]
+    fn test_build_needinfo_flag_marks_flag_new() {
+        assert_eq!(
+            build_needinfo_flag("dev@mozilla.com")["new"],
+            json!(true),
+            "needinfo flags must be marked new or BMO edits an existing flag"
+        );
+    }
+
+    #[test]
     fn test_build_apply_put_body_comment_folded_into_flags() {
         let draft = json!({
             "ni_targets": ["dev@mozilla.com"],
@@ -1468,7 +1479,7 @@ mod tests {
         let body = build_apply_put_body(&draft);
         assert_eq!(
             body["flags"],
-            json!([{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com"}])
+            json!([{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com", "new": true}])
         );
         assert_eq!(
             body["comment"],
@@ -1487,7 +1498,7 @@ mod tests {
         assert_eq!(body["priority"], json!("P1"));
         assert_eq!(
             body["flags"],
-            json!([{"name": "needinfo", "status": "?", "requestee": "a@b.com"}])
+            json!([{"name": "needinfo", "status": "?", "requestee": "a@b.com", "new": true}])
         );
         assert_eq!(
             body["comment"],
