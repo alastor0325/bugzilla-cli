@@ -133,10 +133,22 @@ These **require an API key** — run `bugzilla-cli setup` and choose write mode.
 
 | Command | Description |
 |---------|-------------|
-| `bugzilla-cli post-comment <id> <text>` | Post a comment |
+| `bugzilla-cli post-comment <id> <text> [--tag <name>]...` | Post a comment |
 | `bugzilla-cli set-ni <id> <email>...` | Set needinfo flags (one PUT, multiple recipients) |
 | `bugzilla-cli set-fields <id> [options]` | Update priority, severity, resolution, blocks, keywords |
-| `bugzilla-cli apply <id>` | Apply a pending draft from `~/firefox-triage/pending/bug-{id}.json` |
+| `bugzilla-cli apply <id> [--tag <name>]...` | Apply a pending draft from `~/firefox-triage/pending/bug-{id}.json` |
+
+`--tag <name>` (repeatable) adds Bugzilla comment tags (`"comment_tags"`) in the
+same request as the comment. Tags follow BMO's rule (3 to 24 characters of letters,
+digits, `_`, `.`, `-`) and are checked before any request. BMO drops them silently
+if the account is not in its `comment_taggers_group`. `apply --tag` refuses a draft
+that has no comment.
+
+```bash
+# Post as the media bot and tag the comment so gecko-triage can find it later.
+bugzilla-cli post-comment 1234567 "Triage summary ..." --tag gecko-triage
+bugzilla-cli apply 1234567 --tag gecko-triage
+```
 
 `set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--status <STATUS>`, `--resolution <RES>`, `--dupe-of <id>`, `--blocks-add <id>...`, `--keywords-add <kw>...`, `--cc-add <email>...`
 

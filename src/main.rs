@@ -186,6 +186,9 @@ enum Commands {
         id: u64,
         /// Comment text.
         text: String,
+        /// Comment tag to add (repeatable).
+        #[arg(long = "tag", value_name = "NAME", value_parser = parse_comment_tag)]
+        tags: Vec<String>,
     },
 
     /// Set one or more needinfo flags on a bug in a single PUT.
@@ -246,6 +249,9 @@ enum Commands {
     Apply {
         /// Bug ID whose draft to apply.
         id: u64,
+        /// Tag to add to the draft's comment (repeatable).
+        #[arg(long = "tag", value_name = "NAME", value_parser = parse_comment_tag)]
+        tags: Vec<String>,
     },
 
     /// Start watching a bug for needinfo replies.
@@ -647,8 +653,28 @@ fn cmd_fetch(
     Ok(())
 }
 
-fn build_comment_body(text: &str) -> serde_json::Value {
-    json!({"comment": text, "is_markdown": true})
+/// BMO's comment tag rules (`Bugzilla::Comment::_check_tag`): 3 to 24
+/// characters from `[A-Za-z0-9_.-]`.
+fn parse_comment_tag(tag: &str) -> Result<String, String> {
+    let len = tag.chars().count();
+    if !(3..=24).contains(&len) {
+        return Err(format!("tag must be 3 to 24 characters, got {len}"));
+    }
+    if !tag
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    {
+        return Err("tag may only contain letters, digits, '_', '.' and '-'".into());
+    }
+    Ok(tag.to_string())
+}
+
+fn build_comment_body(text: &str, tags: &[String]) -> serde_json::Value {
+    let mut body = json!({"comment": text, "is_markdown": true});
+    if !tags.is_empty() {
+        body["comment_tags"] = json!(tags);
+    }
+    body
 }
 
 /// Build a needinfo flag for a bug-update PUT. `new: true` stops BMO from
@@ -657,9 +683,9 @@ fn build_needinfo_flag(requestee: &str) -> serde_json::Value {
     json!({"name": "needinfo", "status": "?", "requestee": requestee, "new": true})
 }
 
-fn cmd_post_comment(id: u64, text: &str) -> anyhow::Result<()> {
+fn cmd_post_comment(id: u64, text: &str, tags: &[String]) -> anyhow::Result<()> {
     let client = get_client()?;
-    let body = build_comment_body(text);
+    let body = build_comment_body(text, tags);
     let result = client.post(&format!("/bug/{id}/comment"), &body)?;
     println!("Comment {} posted to bug {}.", result["id"], id);
     Ok(())
@@ -811,7 +837,11 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
 /// Merges field changes, NI flags, and (when field/flag changes are present) the comment
 /// into a single request body. Returns an empty map when there is nothing to PUT —
 /// the caller should fall back to POST /comment for comment-only drafts.
-fn build_apply_put_body(draft: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+/// `tags` become `comment_tags` only when the comment is folded in.
+fn build_apply_put_body(
+    draft: &serde_json::Value,
+    tags: &[String],
+) -> serde_json::Map<String, serde_json::Value> {
     let mut body = build_apply_field_body(draft);
 
     if let Some(ni_targets) = draft["ni_targets"].as_array().filter(|a| !a.is_empty()) {
@@ -831,12 +861,23 @@ fn build_apply_put_body(draft: &serde_json::Value) -> serde_json::Map<String, se
             "comment".into(),
             json!({"body": comment, "is_markdown": true}),
         );
+        if !tags.is_empty() {
+            body.insert("comment_tags".into(), json!(tags));
+        }
     }
 
     body
 }
 
-fn cmd_apply(id: u64) -> anyhow::Result<()> {
+/// Refuse `--tag` on a draft with no comment, since there would be nothing to tag.
+fn check_apply_tags(draft: &serde_json::Value, tags: &[String]) -> anyhow::Result<()> {
+    if !tags.is_empty() && draft["comment"].as_str().is_none_or(str::is_empty) {
+        anyhow::bail!("--tag given but the draft has no comment to tag");
+    }
+    Ok(())
+}
+
+fn cmd_apply(id: u64, tags: &[String]) -> anyhow::Result<()> {
     let client = get_client()?;
     let pending_file = triage_dir().join("pending").join(format!("bug-{id}.json"));
     if !pending_file.exists() {
@@ -848,6 +889,7 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
 
     let text = std::fs::read_to_string(&pending_file)?;
     let draft: serde_json::Value = serde_json::from_str(&text)?;
+    check_apply_tags(&draft, tags)?;
 
     println!(
         "--- Draft for bug {}: {} ---",
@@ -855,6 +897,9 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
         draft["title"].as_str().unwrap_or("?")
     );
     println!("Comment:\n{}", draft["comment"].as_str().unwrap_or(""));
+    if !tags.is_empty() {
+        println!("Comment tags: {}", tags.join(", "));
+    }
     println!("NI targets: {}", draft["ni_targets"]);
     println!(
         "Fields: priority={}, severity={}, status={}, assigned_to={}, blocks_add={}, regressed_by_add={}, see_also_add={}, keywords_add={}, cc_add={}, product={}, component={}",
@@ -890,7 +935,7 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
         WatchList::load(&watch_file_path())?.add(&bug_id.to_string(), title, &targets, &now)?;
     }
 
-    let put_body = build_apply_put_body(&draft);
+    let put_body = build_apply_put_body(&draft, tags);
     if !put_body.is_empty() {
         client.put(
             &format!("/bug/{bug_id}"),
@@ -900,7 +945,7 @@ fn cmd_apply(id: u64) -> anyhow::Result<()> {
         // Comment-only draft: no fields or flags to PUT alongside, so use the comment endpoint.
         client.post(
             &format!("/bug/{bug_id}/comment"),
-            &build_comment_body(comment),
+            &build_comment_body(comment, tags),
         )?;
     }
 
@@ -1089,13 +1134,17 @@ mod tests {
         // writes + whoami require a key
         assert!(requires_auth(&Commands::PostComment {
             id: 1,
-            text: "x".into()
+            text: "x".into(),
+            tags: vec![]
         }));
         assert!(requires_auth(&Commands::SetNi {
             id: 1,
             email: vec![]
         }));
-        assert!(requires_auth(&Commands::Apply { id: 1 }));
+        assert!(requires_auth(&Commands::Apply {
+            id: 1,
+            tags: vec![]
+        }));
         assert!(requires_auth(&Commands::Whoami));
         // reads + local watch edits do not
         assert!(!requires_auth(&Commands::Get {
@@ -1452,7 +1501,7 @@ mod tests {
             "priority": "P2",
             "comment": "looks good"
         });
-        let body = build_apply_put_body(&draft);
+        let body = build_apply_put_body(&draft, &[]);
         assert_eq!(body["priority"], json!("P2"));
         assert_eq!(
             body["comment"],
@@ -1476,7 +1525,7 @@ mod tests {
             "ni_targets": ["dev@mozilla.com"],
             "comment": "need info"
         });
-        let body = build_apply_put_body(&draft);
+        let body = build_apply_put_body(&draft, &[]);
         assert_eq!(
             body["flags"],
             json!([{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com", "new": true}])
@@ -1485,6 +1534,7 @@ mod tests {
             body["comment"],
             json!({"body": "need info", "is_markdown": true})
         );
+        assert!(!body.contains_key("comment_tags"));
     }
 
     #[test]
@@ -1494,7 +1544,7 @@ mod tests {
             "ni_targets": ["a@b.com"],
             "comment": "pinging"
         });
-        let body = build_apply_put_body(&draft);
+        let body = build_apply_put_body(&draft, &[]);
         assert_eq!(body["priority"], json!("P1"));
         assert_eq!(
             body["flags"],
@@ -1510,14 +1560,14 @@ mod tests {
     fn test_build_apply_put_body_comment_only_returns_empty() {
         // No fields, no flags — comment-only draft; caller must POST separately.
         let draft = json!({"comment": "just a note"});
-        let body = build_apply_put_body(&draft);
+        let body = build_apply_put_body(&draft, &[]);
         assert!(body.is_empty());
     }
 
     #[test]
     fn test_build_apply_put_body_fields_only_no_comment_key() {
         let draft = json!({"severity": "S3"});
-        let body = build_apply_put_body(&draft);
+        let body = build_apply_put_body(&draft, &[]);
         assert_eq!(body["severity"], json!("S3"));
         assert!(!body.contains_key("comment"));
         assert!(!body.contains_key("flags"));
@@ -1526,7 +1576,7 @@ mod tests {
     #[test]
     fn test_build_apply_put_body_empty_comment_not_folded() {
         let draft = json!({"priority": "P2", "comment": ""});
-        let body = build_apply_put_body(&draft);
+        let body = build_apply_put_body(&draft, &[]);
         assert!(!body.contains_key("comment"));
     }
 
@@ -1852,14 +1902,109 @@ mod tests {
 
     #[test]
     fn test_build_comment_body_sets_is_markdown() {
-        let body = build_comment_body("**bold** text");
+        let body = build_comment_body("**bold** text", &[]);
         assert_eq!(body["comment"], json!("**bold** text"));
         assert_eq!(body["is_markdown"], json!(true));
     }
 
+    fn tags(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_build_comment_body_no_tags_unchanged() {
+        let body = build_comment_body("hi", &[]);
+        assert_eq!(body, json!({"comment": "hi", "is_markdown": true}));
+    }
+
+    #[test]
+    fn test_build_comment_body_one_tag() {
+        let body = build_comment_body("hi", &tags(&["gecko-triage"]));
+        assert_eq!(
+            body,
+            json!({"comment": "hi", "is_markdown": true, "comment_tags": ["gecko-triage"]})
+        );
+    }
+
+    #[test]
+    fn test_build_comment_body_two_tags() {
+        let body = build_comment_body("hi", &tags(&["gecko-triage", "pilot"]));
+        assert_eq!(body["comment_tags"], json!(["gecko-triage", "pilot"]));
+    }
+
+    #[test]
+    fn test_parse_comment_tag_accepts_valid() {
+        assert_eq!(parse_comment_tag("gecko-triage"), Ok("gecko-triage".into()));
+        assert!(parse_comment_tag("a_b.c").is_ok());
+        assert!(parse_comment_tag("abc").is_ok());
+        assert!(parse_comment_tag(&"x".repeat(24)).is_ok());
+    }
+
+    #[test]
+    fn test_parse_comment_tag_rejects_invalid() {
+        for bad in ["", "ab", "has space", "a,b,c", "tag!", "über-tag?"] {
+            assert!(parse_comment_tag(bad).is_err(), "{bad:?} should be refused");
+        }
+        assert!(parse_comment_tag(&"x".repeat(25)).is_err());
+    }
+
+    #[test]
+    fn test_parse_comment_tag_refused_by_cli() {
+        assert!(
+            Cli::try_parse_from(["bugzilla-cli", "post-comment", "1", "x", "--tag", "a b"])
+                .is_err()
+        );
+        let cli = Cli::try_parse_from([
+            "bugzilla-cli",
+            "apply",
+            "1",
+            "--tag",
+            "gecko-triage",
+            "--tag",
+            "pilot",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Commands::Apply { tags: t, .. } if t == tags(&["gecko-triage", "pilot"]))
+        );
+    }
+
+    #[test]
+    fn test_build_apply_put_body_tags_with_ni_flags() {
+        let draft = json!({
+            "ni_targets": ["dev@mozilla.com"],
+            "comment": "need info"
+        });
+        let body = build_apply_put_body(&draft, &tags(&["gecko-triage"]));
+        assert_eq!(
+            serde_json::Value::Object(body),
+            json!({
+                "flags": [{"name": "needinfo", "status": "?", "requestee": "dev@mozilla.com"}],
+                "comment": {"body": "need info", "is_markdown": true},
+                "comment_tags": ["gecko-triage"]
+            })
+        );
+    }
+
+    #[test]
+    fn test_check_apply_tags() {
+        let t = tags(&["gecko-triage"]);
+        assert!(check_apply_tags(&json!({"comment": "x"}), &t).is_ok());
+        assert!(check_apply_tags(&json!({"priority": "P2"}), &[]).is_ok());
+        assert!(check_apply_tags(&json!({"priority": "P2"}), &t).is_err());
+        assert!(check_apply_tags(&json!({"comment": ""}), &t).is_err());
+    }
+
+    #[test]
+    fn test_build_apply_put_body_tags_dropped_without_comment() {
+        let draft = json!({"priority": "P2"});
+        let body = build_apply_put_body(&draft, &tags(&["gecko-triage"]));
+        assert!(!body.contains_key("comment_tags"));
+    }
+
     #[test]
     fn test_build_comment_body_empty_text() {
-        let body = build_comment_body("");
+        let body = build_comment_body("", &[]);
         assert_eq!(body["comment"], json!(""));
         assert_eq!(body["is_markdown"], json!(true));
     }
@@ -1965,7 +2110,7 @@ fn main() -> anyhow::Result<()> {
             end,
             component,
         } => cmd_fetch(start, end, component)?,
-        Commands::PostComment { id, text } => cmd_post_comment(id, &text)?,
+        Commands::PostComment { id, text, tags } => cmd_post_comment(id, &text, &tags)?,
         Commands::SetNi { id, email } => cmd_set_ni(id, &email)?,
         Commands::SetFields {
             id,
@@ -2012,7 +2157,7 @@ fn main() -> anyhow::Result<()> {
             }
             cmd_set_fields(id, body)?;
         }
-        Commands::Apply { id } => cmd_apply(id)?,
+        Commands::Apply { id, tags } => cmd_apply(id, &tags)?,
         Commands::WatchAdd { id, title, ni } => cmd_watch_add(id, &title, &ni)?,
         Commands::WatchRemove { id } => cmd_watch_remove(id)?,
         Commands::Whoami => cmd_whoami()?,
