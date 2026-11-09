@@ -225,9 +225,10 @@ enum Commands {
         /// Add one or more bug IDs to the regressed_by list (the change(s) that caused this regression).
         #[arg(long, num_args = 1..)]
         regressed_by_add: Vec<u64>,
-        /// Add one or more bug IDs to the See Also list (related bugs; stored as canonical BMO URLs).
+        /// Add one or more bug IDs or URLs (e.g. a spec issue) to the See Also list. Bug IDs are
+        /// stored as canonical BMO URLs; URLs are passed through.
         #[arg(long, num_args = 1..)]
-        see_also_add: Vec<u64>,
+        see_also_add: Vec<String>,
         /// Add one or more keywords.
         #[arg(long, num_args = 1..)]
         keywords_add: Vec<String>,
@@ -702,12 +703,22 @@ fn cmd_set_ni(id: u64, emails: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Map bug IDs to canonical BMO web URLs for the `see_also` field. BMO stores
-/// See Also entries as URLs; derive the web base by trimming the REST suffix.
-fn see_also_urls(ids: &[u64]) -> Vec<String> {
+/// Map See Also entries to URLs. BMO stores See Also entries as URLs, so a bug ID
+/// becomes its canonical BMO web URL (the REST base without `/rest`); anything else,
+/// such as a spec issue URL, is passed through for BMO to validate.
+fn see_also_urls(entries: &[String]) -> Vec<String> {
     let base = BMO_BASE.trim_end_matches("/rest").trim_end_matches('/');
-    ids.iter()
-        .map(|id| format!("{base}/show_bug.cgi?id={id}"))
+    entries
+        .iter()
+        .map(|e| e.trim())
+        .filter(|e| !e.is_empty())
+        .map(|e| {
+            if e.bytes().all(|b| b.is_ascii_digit()) {
+                format!("{base}/show_bug.cgi?id={e}")
+            } else {
+                e.to_string()
+            }
+        })
         .collect()
 }
 
@@ -792,9 +803,18 @@ fn build_apply_field_body(draft: &serde_json::Value) -> serde_json::Map<String, 
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
         .unwrap_or_default();
-    let see_also_add: Vec<u64> = draft["see_also_add"]
+    // Bug IDs (numbers) or URLs (strings).
+    let see_also_add: Vec<String> = draft["see_also_add"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| {
+                    v.as_u64()
+                        .map(|id| id.to_string())
+                        .or_else(|| v.as_str().map(String::from))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     // BMO rejects a `resolution` unless the bug is also moved to a closed
     // status. Triage drafts carry `resolution` (and `dupe_of`) but no
@@ -1246,10 +1266,37 @@ mod tests {
     #[test]
     fn test_see_also_urls_maps_ids_to_bmo_urls() {
         assert_eq!(
-            see_also_urls(&[123u64]),
+            see_also_urls(&["123".to_string()]),
             vec!["https://bugzilla.mozilla.org/show_bug.cgi?id=123".to_string()]
         );
         assert!(see_also_urls(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_see_also_urls_passes_urls_through() {
+        let url = "https://github.com/whatwg/html/issues/1234";
+        assert_eq!(
+            see_also_urls(&[url.to_string(), " ".to_string(), " 5 ".to_string()]),
+            vec![
+                url.to_string(),
+                "https://bugzilla.mozilla.org/show_bug.cgi?id=5".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_apply_field_body_see_also_urls() {
+        // Regression: string entries were dropped, so a spec issue URL never reached BMO.
+        let draft =
+            json!({"see_also_add": [1837553u64, "https://github.com/whatwg/dom/issues/42"]});
+        let body = build_apply_field_body(&draft);
+        assert_eq!(
+            body["see_also"],
+            json!({"add": [
+                "https://bugzilla.mozilla.org/show_bug.cgi?id=1837553",
+                "https://github.com/whatwg/dom/issues/42"
+            ]})
+        );
     }
 
     #[test]
