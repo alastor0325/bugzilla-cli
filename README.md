@@ -150,7 +150,9 @@ bugzilla-cli post-comment 1234567 "Triage summary ..." --tag gecko-triage
 bugzilla-cli apply 1234567 --tag gecko-triage
 ```
 
-`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--status <STATUS>`, `--resolution <RES>`, `--dupe-of <id>`, `--blocks-add <id>...`, `--keywords-add <kw>...`, `--cc-add <email>...`
+`set-fields` options: `--priority P1-P5\|--`, `--severity S1-S4\|--`, `--status <STATUS>`, `--resolution <RES>`, `--dupe-of <id>`, `--blocks-add <id>...`, `--see-also-add <id|url>...`, `--keywords-add <kw>...`, `--cc-add <email>...`
+
+`--see-also-add` and a draft's `see_also_add` take bug IDs, stored as BMO URLs, or URLs such as a spec issue, passed through for BMO to check.
 
 To close a bug: `bugzilla-cli set-fields <id> --status RESOLVED --resolution FIXED`
 To mark duplicate: `bugzilla-cli set-fields <id> --status RESOLVED --resolution DUPLICATE --dupe-of <bug-id>`
